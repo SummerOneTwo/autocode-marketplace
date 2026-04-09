@@ -1,0 +1,20 @@
+{
+  "name": "autocode-marketplace",
+  "owner": {
+    "name": "SummerOneTwo"
+  },
+  "metadata": {
+    "description": "Third-party Claude Code marketplace for AutoCode and related personal plugins."
+  },
+  "plugins": [
+    {
+      "name": "autocode-mcp",
+      "source": {
+        "source": "github",
+        "repo": "SummerOneTwo/AutoCode"
+      },
+      "description": "AutoCode workflow enforcement plugin for competitive programming.",
+      "strict": true
+    }
+  ]
+}
