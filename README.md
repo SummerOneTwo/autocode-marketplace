@@ -2,11 +2,11 @@
 
 Third-party Claude Code marketplace for private or personal plugin distribution.
 
-This repository is configured for remote GitHub-based plugin installation. The default plugin source is `SummerOneTwo/AutoCode`.
+This repository is configured for remote HTTPS git installation. The default plugin source is `https://github.com/SummerOneTwo/AutoCode.git`.
 
 ## Included Plugins
 
-- `autocode` from `SummerOneTwo/AutoCode`
+- `autocode` from `https://github.com/SummerOneTwo/AutoCode.git`
 
 ## Add to Claude Code
 
@@ -28,7 +28,7 @@ claude plugin install autocode@autocode-marketplace
 
 ## Remote Mode
 
-The marketplace installs plugins from remote GitHub sources. For `autocode`, that means the plugin content must be pushed to `SummerOneTwo/AutoCode` before marketplace installs can consume the latest version.
+The marketplace installs plugins from remote HTTPS git sources. For `autocode`, that means the plugin content must be pushed to `https://github.com/SummerOneTwo/AutoCode.git` before marketplace installs can consume the latest version.
 
 ## Local Testing
 
@@ -42,14 +42,14 @@ claude plugin validate .
 
 ## Switch To GitHub Distribution Later
 
-The current committed mode is already GitHub-based. A plugin entry uses this structure:
+The current committed mode is already HTTPS git-based. A plugin entry uses this structure:
 
 ```json
 {
   "name": "autocode",
   "source": {
-    "source": "github",
-    "repo": "SummerOneTwo/AutoCode"
+    "source": "url",
+    "url": "https://github.com/SummerOneTwo/AutoCode.git"
   }
 }
 ```

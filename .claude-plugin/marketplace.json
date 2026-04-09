@@ -10,8 +10,8 @@
     {
       "name": "autocode",
       "source": {
-        "source": "github",
-        "repo": "SummerOneTwo/AutoCode"
+        "source": "url",
+        "url": "https://github.com/SummerOneTwo/AutoCode.git"
       },
       "description": "AutoCode workflow enforcement plugin for competitive programming.",
       "strict": true
