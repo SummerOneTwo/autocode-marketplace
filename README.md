@@ -6,7 +6,7 @@ This repository is configured for remote GitHub-based plugin installation. The d
 
 ## Included Plugins
 
-- `autocode-mcp` from `SummerOneTwo/AutoCode`
+- `autocode` from `SummerOneTwo/AutoCode`
 
 ## Add to Claude Code
 
@@ -23,12 +23,12 @@ claude plugin marketplace add c:/userProgram/program/autocode-marketplace
 After adding the marketplace, install the plugin:
 
 ```bash
-claude plugin install autocode-mcp@autocode-marketplace
+claude plugin install autocode@autocode-marketplace
 ```
 
 ## Remote Mode
 
-The marketplace installs plugins from remote GitHub sources. For `autocode-mcp`, that means the plugin content must be pushed to `SummerOneTwo/AutoCode` before marketplace installs can consume the latest version.
+The marketplace installs plugins from remote GitHub sources. For `autocode`, that means the plugin content must be pushed to `SummerOneTwo/AutoCode` before marketplace installs can consume the latest version.
 
 ## Local Testing
 
@@ -46,7 +46,7 @@ The current committed mode is already GitHub-based. A plugin entry uses this str
 
 ```json
 {
-  "name": "autocode-mcp",
+  "name": "autocode",
   "source": {
     "source": "github",
     "repo": "SummerOneTwo/AutoCode"
