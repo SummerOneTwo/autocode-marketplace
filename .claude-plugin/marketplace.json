@@ -11,7 +11,7 @@
       "name": "autocode",
       "source": {
         "source": "url",
-        "url": "https://github.com/SummerOneTwo/AutoCode.git"
+        "url": "https://github.com/SZTU-ACM/AutoCode.git"
       },
       "description": "AutoCode workflow enforcement plugin for competitive programming.",
       "strict": true
