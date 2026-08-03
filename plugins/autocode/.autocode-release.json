@@ -1,0 +1,22 @@
+{
+  "name": "autocode",
+  "version": "3.0.0",
+  "source_repository": "https://github.com/SZTU-ACM/AutoCode",
+  "source_fingerprint": {
+    ".claude-plugin": "fa6cabf81ba27dc1fc6adf8babfebc1e4570fb80f12328fb75a05f678ed76acf",
+    ".codex-plugin": "7fce8a48796e9eabb8272f4573462295eb2a98a87e78d09949b895446ec41679",
+    ".mcp.json": "8c2a22fc9c79987984ee774eb6f58aa06722e9a9f21e557119063efa6ce164d9",
+    "settings.json": "84d865b730786417409275a28acd297b58606ae6ff5be97dc791d1590c9481d5",
+    "hooks": "1ff530c64fba4dfe8e4413db434dbc9df4bcf281bc86b2da72ccb0a9006fae85",
+    "agents": "ca068dcd6fc10b8bb97a054d4f7d5c7398a88325e539ce0128c0c2b3b823d52b",
+    "skills": "64adabd03cf88e9d091b8590ffd915ab3b7f496a287042e71b239472b22f443e",
+    "scripts": "9bac863f69f5e91ac1123b215bc2000aa739d00f82ca361df62b955a287e3760",
+    "src": "bf0e4f2423dc8eb1269bc85df80e65adaf5ba85200c4a71138470ee8dca50c07",
+    "pyproject.toml": "0d47c34fa84365217a3fb944af24d815190d9c4a7da47da0f39d0ff83ce05573",
+    "uv.lock": "aeaf9fcb11044865618d87ed328169ef37cbe0ae5a5467b7ed3722e6f551ec1a",
+    "README.md": "bd16fec16409fc085855e44388d87ab07e4fcaf0ab3a12f628a257ea3c24381a",
+    "TROUBLESHOOTING.md": "4648bf4eb6607c7a272cd0a31126f40a1ccfb7c45c2b71fe0d298ae32dfbc781",
+    "CHANGELOG.md": "1c8ccc7623776e9905a33f06b8634b85e5ae1cf53fe9a403500cc4187711d8de",
+    "LICENSE": "a1ddac10aef8954a2d9bf8f2088fce1325473f4425264eedcac85745d1161bb8"
+  }
+}

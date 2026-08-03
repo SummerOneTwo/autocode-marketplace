@@ -1,0 +1,91 @@
+[project]
+name = "autocode-mcp"
+version = "3.0.0"
+description = "MCP Server for competitive programming problem creation, based on AutoCode paper"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "mcp>=1.0.0,<2.0.0",
+    "pydantic>=2.0.0",
+    "pywin32>=306; sys_platform == 'win32'",
+    "psutil>=5.9.0",
+    "pyyaml>=6.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+autocode-mcp = "autocode_mcp.server:main"
+autocode-verify = "autocode_mcp.cli.verify:main"
+autocode-audit = "autocode_mcp.cli.audit:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autocode_mcp"]
+artifacts = ["src/autocode_mcp/templates"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "packaging: marks tests as packaging smoke tests (run after uv build)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["autocode_mcp"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+exclude = ["tests/", ".venv/"]
+# 收紧：已移除实测可修复或零触发的 no-untyped-def / no-any-return / index / type-var。
+# 保留 no-untyped-call 因其主要由 MCP 框架装饰器误报触发。
+disable_error_code = ["override", "untyped-decorator", "var-annotated", "type-arg", "arg-type", "no-untyped-call"]
+
+[tool.coverage.run]
+source = ["src/autocode_mcp"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
+[dependency-groups]
+dev = [
+    "twine>=6.2.0",
+    "types-psutil>=7.2.2.20260402",
+    "types-pywin32>=311.0.0.20260402",
+    "types-pyyaml>=6.0.12.20250915",
+]
