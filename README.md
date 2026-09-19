@@ -1,6 +1,6 @@
 # AutoCode Marketplace
 
-Claude Code and Codex marketplace for AutoCode distribution.
+Claude Code, Codex, and DeepSeek Harness (DSH) marketplace for AutoCode distribution.
 
 This repository is configured for remote HTTPS git installation. The default plugin source is `https://github.com/SZTU-ACM/AutoCode.git`.
 
@@ -10,9 +10,13 @@ AutoCode source repository with `scripts/build_plugin_bundle.py` before publishi
 The dependency-free `scripts/validate_marketplace.py` checks the committed catalog,
 manifests, and provenance metadata in this repository.
 
+The DeepSeek Harness (DSH) catalog is kept in `.dsh-plugin/catalog.json` and points to
+the DSH bundle under `plugins/autocode-dsh/`.
+
 ## Included Plugins
 
 - `autocode` from `https://github.com/SZTU-ACM/AutoCode.git`
+- `@autocode/dsh-plugin` under `plugins/autocode-dsh`
 
 ## Add to Claude Code
 
@@ -44,6 +48,26 @@ codex plugin add autocode@autocode-marketplace
 
 For a remote checkout, replace the path with the published marketplace URL. The
 Codex catalog must be committed together with `plugins/autocode/`.
+
+## Add to DeepSeek Harness (DSH)
+
+From the remote marketplace repository:
+
+```bash
+dsh plugin add git+https://github.com/SummerOneTwo/autocode-marketplace.git#path:plugins/autocode-dsh
+```
+
+From a local checkout of this marketplace:
+
+```bash
+dsh plugin add ./plugins/autocode-dsh
+```
+
+Or inject via patch configuration:
+
+```bash
+dsh --patch ./plugins/autocode-dsh/cordis.patch.yml
+```
 
 ## Claude Remote Mode
 
