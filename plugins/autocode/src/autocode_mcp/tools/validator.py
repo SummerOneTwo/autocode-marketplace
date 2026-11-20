@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import os
 
-from ..utils.compiler import run_binary
+from pydantic import ValidationError
+
+from ..utils.compiler import resolve_effective_compiler, run_binary
 from ..utils.platform import get_exe_extension
+from ..workflow import load_manifest
 from .base import Tool, ToolResult, input_schema_from_model
 from .mixins import BuildToolMixin, resolve_source
 from .schemas import ValidatorBuildInput, ValidatorSelectInput
@@ -32,6 +35,12 @@ class ValidatorBuildTool(Tool, BuildToolMixin):
         3. 运行测试用例验证健壮性
         4. 返回得分和详细结果
 
+        规范要求（testlib.h）：
+        - 源码文件需包含 #include "testlib.h"
+        - 入口函数首行必须调用 registerValidation(argc, argv);
+        - 借助 inf.readInt / readSpace / readEoln 校验输入格式，末尾调用 inf.readEof();
+        - 必须传入 test_cases 测试用例（正例与反例）计算准确率，以满足工作流门禁（accuracy >= 0.9）
+
         前置条件：
         1. 已运行 problem_create 创建题目目录
 
@@ -50,9 +59,15 @@ class ValidatorBuildTool(Tool, BuildToolMixin):
         code: str | None = None,
         source_path: str | None = None,
         test_cases: list[dict] | None = None,
-        compiler: str = "g++",
+        compiler: str | None = None,
     ) -> ToolResult:
         """执行 Validator 构建。"""
+        try:
+            manifest = load_manifest(problem_dir)
+        except (ValidationError, OSError, ValueError) as exc:
+            return ToolResult.fail(f"invalid or unreadable manifest.json: {exc}")
+        effective_compiler = resolve_effective_compiler(compiler, manifest)
+
         resolved, err = resolve_source(
             problem_dir,
             code,
@@ -79,7 +94,7 @@ class ValidatorBuildTool(Tool, BuildToolMixin):
 
         compile_source = resolved.original_source_path or canonical_path
         include_dirs = [resolved.include_dir] if resolved.include_dir else None
-        compile_result = await self.build(compile_source, binary_path, compiler=compiler, include_dirs=include_dirs)
+        compile_result = await self.build(compile_source, binary_path, compiler=effective_compiler, include_dirs=include_dirs)
 
         if not compile_result.success:
             return ToolResult.fail(
@@ -93,11 +108,14 @@ class ValidatorBuildTool(Tool, BuildToolMixin):
 
         # 如果没有测试用例，直接返回成功
         if not test_cases:
+            has_eof = "readEof" in resolved.code or "seekEof" in resolved.code
             return ToolResult.ok(
                 source_path=compile_source,
                 canonical_path=canonical_path,
                 binary_path=binary_path,
                 binary_size=binary_size,
+                accuracy=None,
+                has_eof_check=has_eof,
                 compile_log=compile_result.stderr,
                 message=(
                     "Validator built successfully (no test cases provided). "
@@ -175,11 +193,25 @@ class ValidatorSelectTool(Tool):
         if not candidates:
             return ToolResult.fail("No candidates provided")
 
-        # 按得分排序
+        def _sort_key(c: dict) -> tuple[float, int, str, str]:
+            score = float(c.get("score", 0)) if isinstance(c.get("score"), (int, float)) else 0.0
+            code = c.get("code")
+            if code is not None and str(code):
+                code_len = len(str(code))
+            elif c.get("source_path") and os.path.isfile(str(c.get("source_path"))):
+                try:
+                    code_len = os.path.getsize(str(c.get("source_path")))
+                except OSError:
+                    code_len = 0
+            else:
+                code_len = 0
+            cand_id = str(c.get("id") or "")
+            bin_path = str(c.get("binary_path") or "")
+            return (-score, code_len, cand_id, bin_path)
+
         sorted_candidates = sorted(
             candidates,
-            key=lambda x: x.get("score", 0),
-            reverse=True,
+            key=_sort_key,
         )
 
         best = sorted_candidates[0]

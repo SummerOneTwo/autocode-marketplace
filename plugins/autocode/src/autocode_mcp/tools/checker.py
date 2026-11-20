@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import os
 
-from ..utils.compiler import run_binary_with_args
+from pydantic import ValidationError
+
+from ..utils.checker_judge import verdict_from_run
+from ..utils.compiler import resolve_effective_compiler, run_binary_with_args
 from ..utils.platform import get_exe_extension
+from ..workflow import load_manifest
 from .base import Tool, ToolResult, input_schema_from_model
 from .mixins import BuildToolMixin, resolve_source
 from .schemas import CheckerBuildInput
@@ -46,9 +50,15 @@ class CheckerBuildTool(Tool, BuildToolMixin):
         code: str | None = None,
         source_path: str | None = None,
         test_scenarios: list[dict] | None = None,
-        compiler: str = "g++",
+        compiler: str | None = None,
     ) -> ToolResult:
         """执行 Checker 构建。"""
+        try:
+            manifest = load_manifest(problem_dir)
+        except (ValidationError, OSError, ValueError) as exc:
+            return ToolResult.fail(f"invalid or unreadable manifest.json: {exc}")
+        effective_compiler = resolve_effective_compiler(compiler, manifest)
+
         resolved, err = resolve_source(
             problem_dir,
             code,
@@ -72,9 +82,15 @@ class CheckerBuildTool(Tool, BuildToolMixin):
 
         binary_path = os.path.join(files_dir, f"checker{get_exe_extension()}")
 
+        if os.path.isfile(binary_path):
+            try:
+                os.remove(binary_path)
+            except OSError:
+                pass
+
         compile_source = resolved.original_source_path or canonical_path
         include_dirs = [resolved.include_dir] if resolved.include_dir else None
-        compile_result = await self.build(compile_source, binary_path, compiler=compiler, include_dirs=include_dirs)
+        compile_result = await self.build(compile_source, binary_path, compiler=effective_compiler, include_dirs=include_dirs)
 
         if not compile_result.success:
             return ToolResult.fail(
@@ -117,11 +133,11 @@ class CheckerBuildTool(Tool, BuildToolMixin):
                 output_file = os.path.join(temp_dir, f"output_{i}.txt")
                 answer_file = os.path.join(temp_dir, f"answer_{i}.txt")
 
-                with open(input_file, "w", encoding="utf-8") as f:
+                with open(input_file, "w", encoding="utf-8", newline="\n") as f:
                     f.write(input_data)
-                with open(output_file, "w", encoding="utf-8") as f:
+                with open(output_file, "w", encoding="utf-8", newline="\n") as f:
                     f.write(contestant_output)
-                with open(answer_file, "w", encoding="utf-8") as f:
+                with open(answer_file, "w", encoding="utf-8", newline="\n") as f:
                     f.write(reference_output)
 
                 # 运行 checker
@@ -132,20 +148,8 @@ class CheckerBuildTool(Tool, BuildToolMixin):
                     timeout=5,
                 )
 
-                # Checker 返回码约定 (testlib.h):
-                # 0 = AC, 1 = WA, 2 = PE, 3+ = Fail (checker error)
-                verdict_map = {0: "AC", 1: "WA", 2: "PE"}
-                if run_result.return_code in verdict_map:
-                    actual_verdict = verdict_map[run_result.return_code]
-                elif run_result.return_code >= 3:
-                    # Checker 自身失败，返回 FAIL 而非 WA
-                    actual_verdict = "FAIL"
-                else:
-                    actual_verdict = "WA"
-
-                # 检查是否超时
-                if run_result.timed_out:
-                    actual_verdict = "TLE"
+                # Checker 返回码约定 (testlib.h): 0=AC, 1=WA, 2/4/8=PE, 7=PC, 3/其他=FAIL
+                actual_verdict = verdict_from_run(run_result)
 
                 is_correct = actual_verdict == expected_verdict
                 if is_correct:

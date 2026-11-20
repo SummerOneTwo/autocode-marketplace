@@ -1,22 +1,22 @@
 {
   "name": "autocode",
-  "version": "3.0.0",
+  "version": "3.2.0",
   "source_repository": "https://github.com/SZTU-ACM/AutoCode",
   "source_fingerprint": {
-    ".claude-plugin": "fa6cabf81ba27dc1fc6adf8babfebc1e4570fb80f12328fb75a05f678ed76acf",
-    ".codex-plugin": "7fce8a48796e9eabb8272f4573462295eb2a98a87e78d09949b895446ec41679",
-    ".mcp.json": "8c2a22fc9c79987984ee774eb6f58aa06722e9a9f21e557119063efa6ce164d9",
-    "settings.json": "84d865b730786417409275a28acd297b58606ae6ff5be97dc791d1590c9481d5",
-    "hooks": "1ff530c64fba4dfe8e4413db434dbc9df4bcf281bc86b2da72ccb0a9006fae85",
-    "agents": "ca068dcd6fc10b8bb97a054d4f7d5c7398a88325e539ce0128c0c2b3b823d52b",
-    "skills": "64adabd03cf88e9d091b8590ffd915ab3b7f496a287042e71b239472b22f443e",
-    "scripts": "9bac863f69f5e91ac1123b215bc2000aa739d00f82ca361df62b955a287e3760",
-    "src": "bf0e4f2423dc8eb1269bc85df80e65adaf5ba85200c4a71138470ee8dca50c07",
-    "pyproject.toml": "0d47c34fa84365217a3fb944af24d815190d9c4a7da47da0f39d0ff83ce05573",
-    "uv.lock": "aeaf9fcb11044865618d87ed328169ef37cbe0ae5a5467b7ed3722e6f551ec1a",
-    "README.md": "bd16fec16409fc085855e44388d87ab07e4fcaf0ab3a12f628a257ea3c24381a",
-    "TROUBLESHOOTING.md": "4648bf4eb6607c7a272cd0a31126f40a1ccfb7c45c2b71fe0d298ae32dfbc781",
-    "CHANGELOG.md": "1c8ccc7623776e9905a33f06b8634b85e5ae1cf53fe9a403500cc4187711d8de",
-    "LICENSE": "a1ddac10aef8954a2d9bf8f2088fce1325473f4425264eedcac85745d1161bb8"
+    ".claude-plugin": "adc1172994fafc02eb8cf85fc868d528fe9a7e97243fc380401495f8758ee819",
+    ".codex-plugin": "4df63f69778b3e87a0815e41ca21894ea48a0b4795dc9805b9323d5df1cb7ef3",
+    ".mcp.json": "5ae3b1d05f87638b7f1be2ee48bf6524f16bce903e9e31895fdb1124774cf103",
+    "settings.json": "13139917723f8d6590472d6af4c31c86521aa55e637ad095253bdbc2035af20b",
+    "hooks": "65c6c786f28d347b7bafde3ff8d4c603b943cb112c962b57d97db5f92f867ce0",
+    "agents": "906ac49fd0f055ac794006558e1690dd84688c79fad59a7277688a910fcfe80b",
+    "skills": "e815943b72cfe69ea8ab87c3ef9f216d261918bed7360ea0f034bf2d68284403",
+    "scripts": "ef1d275edbc2ba0112d82dfc0e5ac9232250357a0ee55f5a6f2b5fdb55d2c9b9",
+    "src": "0dad5c702e8b7f855c91e419bb528d47658c28d8501a96b9bfe87e999356d9ed",
+    "pyproject.toml": "5ddfb0ff2f39dbfd0ff3499be9ad5eaa0baf3c831bcc749054076f1368b410d7",
+    "uv.lock": "c128a0a5217b1ea8f6593bfd48721b7e1fba10075dc09065a64c2fd77a59e33b",
+    "README.md": "57890700e67d47789e9566111e9fc30789f58b384f0d3bb246d92442489b9e0e",
+    "TROUBLESHOOTING.md": "3c8d8823aa3546d4491311f9da7aa1d79a5afb159c6d09db6e986df429e01967",
+    "CHANGELOG.md": "6369dc76cb7eb4d9f1ae8ca6ced572902fd4b8913872719d40845e5cc055b091",
+    "LICENSE": "5bc75cba9ef77fef96b9ad8769c3f541b41db40a9607afd1d83294da5c2a4f72"
   }
 }

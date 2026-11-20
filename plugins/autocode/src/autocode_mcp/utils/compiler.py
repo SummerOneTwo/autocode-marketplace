@@ -12,17 +12,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
+import signal
+import subprocess
 import sys
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from .. import TEMPLATES_DIR
 from .cache import CompileCache
 from .platform import get_exe_extension
-from .process import POSIX_KILL_SIGNAL as _POSIX_KILL_SIGNAL
+from .process import terminate_pid_tree
 
 if TYPE_CHECKING:
     from .win_job import WinJobObject
@@ -53,6 +56,126 @@ class CompileResult:
     error: str | None = None
     stdout: str = ""
     stderr: str = ""
+    hint: str | None = None
+
+
+_BITS_STDCPP_RE = re.compile(r"#\s*include\s*<\s*bits/stdc\+\+\.h\s*>")
+_COMPILER_INFO_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def has_bits_stdcpp_include(code: str) -> bool:
+    """Detect whether C++ source includes GCC-only <bits/stdc++.h>."""
+    return bool(_BITS_STDCPP_RE.search(code))
+
+
+def _find_suggested_gcc_compilers() -> list[str]:
+    """Probe common GNU g++ versioned binaries (e.g. Homebrew g++-14 on macOS)."""
+    candidates = ("g++-15", "g++-14", "g++-13", "g++-12", "g++-11")
+    extra_dirs = ("/opt/homebrew/bin", "/usr/local/bin")
+    found: list[str] = []
+    seen: set[str] = set()
+    for name in candidates:
+        path = shutil.which(name)
+        if not path:
+            for d in extra_dirs:
+                candidate = os.path.join(d, name)
+                if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                    path = candidate
+                    break
+        if path and path not in seen:
+            seen.add(path)
+            found.append(path)
+    return found
+
+
+def resolve_effective_compiler(
+    explicit_compiler: str | None,
+    manifest: Any | None = None,
+    *,
+    default: str = "g++",
+) -> str:
+    """Resolve C++ compiler priority: explicit arg > manifest.compiler > default ('g++')."""
+    if isinstance(explicit_compiler, str) and explicit_compiler.strip():
+        return explicit_compiler.strip()
+    manifest_compiler = getattr(manifest, "compiler", None) if manifest is not None else None
+    if isinstance(manifest_compiler, str) and manifest_compiler.strip():
+        return manifest_compiler.strip()
+    return default
+
+
+def detect_compiler_info(compiler: str = "g++", *, use_cache: bool = True) -> dict[str, Any]:
+    """Inspect a C++ compiler binary to detect Apple Clang / GNU GCC and <bits/stdc++.h> support."""
+    key = (compiler or "g++").strip() or "g++"
+    resolved = shutil.which(key) or (key if os.path.isfile(key) else None)
+    cache_key = resolved or key
+    if use_cache and cache_key in _COMPILER_INFO_CACHE:
+        return dict(_COMPILER_INFO_CACHE[cache_key])
+
+    info: dict[str, Any] = {
+        "compiler": key,
+        "resolved_path": resolved,
+        "available": False,
+        "is_apple_clang": False,
+        "is_clang": False,
+        "is_gcc": False,
+        "version_line": "",
+        "supports_bits_stdcpp": True,
+        "suggested_gcc_compilers": [],
+        "warning": None,
+    }
+    try:
+        proc = subprocess.run(
+            [key, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+            check=False,
+        )
+        combined = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        first_line = combined.splitlines()[0].strip() if combined else ""
+        lower = combined.lower()
+        is_apple_clang = "apple clang" in lower or ("clang" in lower and "apple" in lower)
+        is_clang = "clang" in lower
+        is_gcc = (not is_clang) and (
+            "free software foundation" in lower or "gcc" in lower or "g++" in lower
+        )
+        info["available"] = proc.returncode == 0
+        info["version_line"] = first_line
+        info["is_apple_clang"] = is_apple_clang
+        info["is_clang"] = is_clang
+        info["is_gcc"] = is_gcc
+        info["supports_bits_stdcpp"] = not is_apple_clang
+        if is_apple_clang:
+            suggested = _find_suggested_gcc_compilers()
+            info["suggested_gcc_compilers"] = suggested
+            if suggested:
+                gcc_hint = (
+                    f"Detected GNU GCC alternative(s): {', '.join(suggested)}. "
+                    f"You can set \"compiler\": \"{suggested[0]}\" in .autocode/manifest.json "
+                    "or pass compiler=..., or use standard C++20 headers instead of <bits/stdc++.h>."
+                )
+            else:
+                gcc_hint = (
+                    "Use standard C++20 headers (<iostream>, <vector>, <algorithm>, etc.) "
+                    "instead of <bits/stdc++.h>, or install Homebrew GCC (e.g. `brew install gcc`) "
+                    "and set \"compiler\": \"g++-14\" in .autocode/manifest.json."
+                )
+            info["warning"] = (
+                f"Compiler '{key}' is Apple Clang ({first_line}), which does not support "
+                f"GCC-only <bits/stdc++.h>. {gcc_hint}"
+            )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        info["available"] = False
+        info["warning"] = f"Compiler '{key}' not found or not executable."
+
+    if use_cache:
+        _COMPILER_INFO_CACHE[cache_key] = dict(info)
+    return info
+
+
+async def detect_compiler_info_async(compiler: str = "g++", *, use_cache: bool = True) -> dict[str, Any]:
+    """Async wrapper around ``detect_compiler_info``."""
+    return await asyncio.to_thread(detect_compiler_info, compiler, use_cache=use_cache)
 
 
 @dataclass
@@ -62,6 +185,7 @@ class BuildSpec:
     source: str
     binary: str | None = None
     include_dirs: list[str] | None = None
+    extra_sources: list[str] | None = None
     compiler: str = "g++"
     std: str = "c++20"
     opt_level: str = "O2"
@@ -79,6 +203,7 @@ class RunResult:
     error: str | None = None
     timed_out: bool = False
     time_ms: int = 0
+    memory_limit_exceeded: bool = False
 
 
 def get_work_dir(problem_dir: str, tool_name: str) -> str:
@@ -104,6 +229,40 @@ def cleanup_work_dir(work_dir: str) -> None:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def _has_local_headers(
+    include_dirs: list[str] | None,
+    source_path: str | None = None,
+) -> bool:
+    """Check whether any include directory or source directory contains local C/C++ headers."""
+    dirs_to_check: list[str] = list(include_dirs or [])
+    if source_path:
+        src_dir = os.path.dirname(os.path.abspath(source_path))
+        if src_dir:
+            dirs_to_check.append(src_dir)
+    if not dirs_to_check:
+        return False
+    templates_real = os.path.realpath(TEMPLATES_DIR) if os.path.exists(TEMPLATES_DIR) else ""
+    header_exts = (".h", ".hpp", ".hh", ".hxx")
+    seen_real: set[str] = set()
+    for inc_dir in dirs_to_check:
+        if not inc_dir or not os.path.isdir(inc_dir):
+            continue
+        real_dir = os.path.normcase(os.path.realpath(inc_dir))
+        if real_dir in seen_real:
+            continue
+        seen_real.add(real_dir)
+        if templates_real and real_dir == os.path.normcase(templates_real):
+            continue
+        try:
+            for entry in os.listdir(inc_dir):
+                lower = entry.lower()
+                if lower.endswith(header_exts) and lower != "testlib.h":
+                    return True
+        except OSError:
+            return True
+    return False
+
+
 async def compile_cpp(
     source_path: str,
     binary_path: str,
@@ -112,20 +271,22 @@ async def compile_cpp(
     std: str = "c++20",
     opt_level: str = "O2",
     include_dirs: list[str] | None = None,
+    extra_sources: list[str] | None = None,
     use_cache: bool = True,
 ) -> CompileResult:
     """
-    编译 C++ 文件，带超时控制。
+    编译 C++ 文件（支持多文件链接，如 grader_linked 通信题），带超时控制。
 
     Args:
-        source_path: 源文件路径
+        source_path: 主源文件路径
         binary_path: 输出二进制文件路径
         timeout: 超时时间（秒）
         compiler: 编译器名称
         std: C++ 标准
         opt_level: 优化级别
         include_dirs: 额外的 include 目录列表
-        use_cache: 是否使用编译缓存
+        extra_sources: 一起编译链接的附加源文件列表（如 files/grader.cpp）
+        use_cache: 是否使用编译缓存（多文件或存在本地头文件时自动绕过缓存避免陈旧命中）
 
     Returns:
         CompileResult: 编译结果
@@ -136,7 +297,19 @@ async def compile_cpp(
             error=f"Source file not found: {source_path}",
         )
 
-    if use_cache:
+    normalized_extra = list(extra_sources or [])
+    for extra_src in normalized_extra:
+        if not os.path.exists(extra_src):
+            return CompileResult(
+                success=False,
+                error=f"Extra source file not found: {extra_src}",
+            )
+
+    effective_use_cache = (
+        use_cache and not normalized_extra and not _has_local_headers(include_dirs, source_path)
+    )
+
+    if effective_use_cache:
         cached_binary = _cache.get(source_path, compiler, std, opt_level)
         if cached_binary:
             output_dir = os.path.dirname(binary_path)
@@ -164,14 +337,17 @@ async def compile_cpp(
             include_flags.extend(["-I", inc_dir])
     # 添加 templates 目录
     if os.path.exists(templates_dir):
-        include_flags.extend(["-I", templates_dir])
+        include_flags.extend(["-isystem", templates_dir])
 
     cmd = [
         compiler,
         f"-std={std}",
         f"-{opt_level}",
+        "-Wall",
+        "-Wextra",
         *include_flags,
         source_path,
+        *normalized_extra,
         "-o",
         binary_path,
     ]
@@ -180,32 +356,53 @@ async def compile_cpp(
     if sys.platform == "win32":
         cmd.append("-static")
 
+    popen_kwargs: dict[str, Any] = {}
+    if sys.platform != "win32":
+        popen_kwargs["start_new_session"] = True
+
     try:
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **popen_kwargs,
         )
 
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
+        except (asyncio.TimeoutError, TimeoutError, asyncio.CancelledError) as e:
+            if process.pid:
+                await terminate_pid_tree(process.pid)
+            try:
+                await asyncio.wait_for(process.wait(), timeout=2.0)
+            except Exception:
+                pass
+            if isinstance(e, asyncio.CancelledError):
+                raise
             return CompileResult(
                 success=False,
                 error=f"Compilation timeout after {timeout}s. Consider increasing timeout or simplifying source code.",
             )
 
         if process.returncode != 0:
+            out_text = stdout.decode("utf-8", errors="replace")
+            err_text = stderr.decode("utf-8", errors="replace")
+            hint: str | None = None
+            error_msg = f"Compilation failed with code {process.returncode}"
+            if "bits/stdc++.h" in err_text:
+                comp_info = await detect_compiler_info_async(compiler)
+                if comp_info.get("is_apple_clang") and comp_info.get("warning"):
+                    hint = str(comp_info["warning"])
+                    error_msg = f"{error_msg}. {hint}"
             return CompileResult(
                 success=False,
-                error=f"Compilation failed with code {process.returncode}",
-                stdout=stdout.decode("utf-8", errors="replace"),
-                stderr=stderr.decode("utf-8", errors="replace"),
+                error=error_msg,
+                stdout=out_text,
+                stderr=err_text,
+                hint=hint,
             )
 
-        if use_cache:
+        if effective_use_cache:
             _cache.set(source_path, binary_path, compiler, std, opt_level)
 
         return CompileResult(
@@ -270,15 +467,8 @@ async def _force_terminate_process(
         except OSError as e:
             _logger.debug("Job object terminate failed: %s", e)
 
-    # POSIX 上子进程以 start_new_session 启动，优先按进程组整树回收，
-    # 避免 generator 派生的子进程残留。
-    if os.name != "nt" and process.pid:
-        try:
-            cast(Any, os).killpg(cast(Any, os).getpgid(process.pid), _POSIX_KILL_SIGNAL)
-        except (ProcessLookupError, PermissionError):
-            pass
-        except OSError as e:
-            _logger.debug("killpg failed (pid=%s): %s", process.pid, e)
+    if process.pid:
+        await terminate_pid_tree(process.pid)
 
     # 再尝试正常终止
     try:
@@ -292,7 +482,7 @@ async def _force_terminate_process(
     # 等待进程退出，设置超时防止卡住
     try:
         await asyncio.wait_for(process.wait(), timeout=2.0)
-    except TimeoutError:
+    except (asyncio.TimeoutError, TimeoutError):
         # 如果 2 秒后进程仍未退出，再次尝试强制终止
         try:
             process.kill()
@@ -395,13 +585,29 @@ async def _run_process(
             # 调用被取消时也必须强制清理子进程，防止残留。
             await _force_terminate_process(process, job)
             raise
-        except TimeoutError:
+        except (asyncio.TimeoutError, TimeoutError):
             # 超时时强制终止进程
             await _force_terminate_process(process, job)
+            out_str = ""
+            err_str = ""
+            if stdout_path and os.path.exists(stdout_path):
+                try:
+                    with open(stdout_path, "rb") as _out:
+                        out_str = _out.read(10 * 1024 * 1024).decode("utf-8", errors="replace")
+                except OSError:
+                    pass
+            if stderr_path and os.path.exists(stderr_path):
+                try:
+                    with open(stderr_path, "rb") as _err:
+                        err_str = _err.read(10 * 1024 * 1024).decode("utf-8", errors="replace")
+                except OSError:
+                    pass
             return RunResult(
                 success=False,
                 timed_out=True,
                 error=f"Execution timeout after {timeout}s. The program may contain an infinite loop or the input data may be too large.",
+                stdout=out_str,
+                stderr=err_str,
                 time_ms=int((time.time() - start_time) * 1000),
             )
 
@@ -415,14 +621,23 @@ async def _run_process(
         out_f.close()
         err_f.close()
         with open(stdout_path, "rb") as _out, open(stderr_path, "rb") as _err:
-            stdout_data = _out.read()
-            stderr_data = _err.read()
+            stdout_data = _out.read(10 * 1024 * 1024)
+            stderr_data = _err.read(10 * 1024 * 1024)
+        ret = process.returncode if process.returncode is not None else -1
+        out_str = stdout_data.decode("utf-8", errors="replace")
+        err_str = stderr_data.decode("utf-8", errors="replace")
+        mle = False
+        if ret in (-9, 137) or (hasattr(signal, "SIGKILL") and ret == -signal.SIGKILL):
+            mle = True
+        elif "bad_alloc" in err_str or "Out of memory" in err_str:
+            mle = True
         return RunResult(
-            success=process.returncode == 0,
-            return_code=process.returncode if process.returncode is not None else -1,
-            stdout=stdout_data.decode("utf-8", errors="replace"),
-            stderr=stderr_data.decode("utf-8", errors="replace"),
+            success=ret == 0,
+            return_code=ret,
+            stdout=out_str,
+            stderr=err_str,
             time_ms=elapsed_ms,
+            memory_limit_exceeded=mle,
         )
 
     except FileNotFoundError:
@@ -593,6 +808,14 @@ async def compile_all(
                 binary_path = spec.binary if os.path.isabs(spec.binary) else os.path.join(problem_dir, spec.binary)
             else:
                 binary_path = os.path.splitext(source_path)[0] + exe_ext
+            resolved_extra = (
+                [
+                    p if os.path.isabs(p) else os.path.join(problem_dir, p)
+                    for p in spec.extra_sources
+                ]
+                if spec.extra_sources
+                else None
+            )
             result = await compile_cpp(
                 source_path,
                 binary_path,
@@ -601,6 +824,7 @@ async def compile_all(
                 std=spec.std,
                 opt_level=spec.opt_level,
                 include_dirs=spec.include_dirs,
+                extra_sources=resolved_extra,
             )
             return source_key, result
 
