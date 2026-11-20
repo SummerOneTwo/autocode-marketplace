@@ -1,8 +1,58 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+ProblemType = Literal["standard", "spj", "interactive", "communication"]
+OracleMode = Literal["brute", "interactor_only", "reference_solutions"]
+ProtocolMode = Literal["interactive_1v1", "run_twice", "multi_process", "grader_linked"]
+
+_COMMUNICATION_MODES = frozenset({"run_twice", "multi_process", "grader_linked"})
+_WINDOWS_DRIVE_RE = re.compile(r"^[a-zA-Z]:")
+
+
+def _reject_bool_value(value: Any, field_name: str) -> Any:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer, not bool")
+    return value
+
+
+def _reject_bool_list(value: Any, field_name: str) -> Any:
+    if isinstance(value, list | tuple):
+        for item in value:
+            if isinstance(item, bool):
+                raise ValueError(f"{field_name} elements must be integers, not bool")
+    return value
+
+
+def _validate_safe_rel_path(value: Any, field_name: str) -> Any:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty relative path")
+    if "\x00" in value:
+        raise ValueError(f"{field_name} contains null byte")
+    normalized = value.replace("\\", "/").strip()
+    if normalized.startswith("/") or _WINDOWS_DRIVE_RE.match(normalized) or Path(normalized).is_absolute():
+        raise ValueError(f"{field_name} must be a relative path inside problem_dir")
+    parts = Path(normalized).parts
+    if any(part == ".." for part in parts):
+        raise ValueError(f"{field_name} must not contain '..' traversal segments")
+    return normalized
+
+
+def _validate_safe_stem(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        raise ValueError(f"{field_name} entries must be non-empty strings")
+    cleaned = value.strip()
+    if cleaned in {".", ".."} or any(sep in cleaned for sep in ("/", "\\", ":")):
+        raise ValueError(
+            f"{field_name} entry must be a safe file stem without path separators: {value!r}"
+        )
+    return cleaned
 
 
 class CasePlanItem(BaseModel):
@@ -21,6 +71,184 @@ class SolutionEntry(BaseModel):
     path: str
     expected: Literal["pass", "fail"] | None = None
 
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_solution_name(cls, value: Any) -> str:
+        return _validate_safe_stem(value, "solutions.name")
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def validate_solution_path(cls, value: Any) -> str:
+        res = _validate_safe_rel_path(value, "solutions.path")
+        if res is None:
+            raise ValueError("solutions.path must be a non-empty relative path")
+        return str(res)
+
+
+class ProtocolConfig(BaseModel):
+    """Protocol specification for interactive and communication problems."""
+
+    mode: ProtocolMode = "interactive_1v1"
+    adaptive: bool = False
+    max_queries: int | None = Field(default=None, ge=1)
+    max_bits: int | None = Field(default=None, ge=1)
+    max_bytes: int | None = Field(default=None, ge=1)
+    max_rounds: int | None = Field(default=None, ge=1)
+    passes: int = Field(default=2, ge=1, le=16)
+    pass_headers: list[str] = Field(default_factory=lambda: ["first", "second"])
+    allow_validator: bool = True
+    communicator_file: str | None = None
+    header_file: str | None = None
+    grader_file: str | None = None
+    participant_solutions: list[str] = Field(default_factory=list)
+
+    @field_validator("passes", "max_queries", "max_bits", "max_bytes", "max_rounds", mode="before")
+    @classmethod
+    def reject_bool_numeric_fields(cls, value: Any, info: Any) -> Any:
+        return _reject_bool_value(value, str(info.field_name))
+
+    @field_validator("communicator_file", "header_file", "grader_file", mode="before")
+    @classmethod
+    def validate_protocol_paths(cls, value: Any, info: Any) -> Any:
+        return _validate_safe_rel_path(value, str(info.field_name))
+
+    @field_validator("participant_solutions", mode="before")
+    @classmethod
+    def validate_participant_solutions(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("participant_solutions must be a list of solution stems")
+        return [_validate_safe_stem(item, "participant_solutions") for item in value]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_pass_headers(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        mode = data.get("mode", "interactive_1v1")
+        passes = data.get("passes", 2)
+        if mode == "run_twice" and "pass_headers" not in data and isinstance(passes, int) and not isinstance(passes, bool):
+            if passes == 2:
+                return data
+            if 1 <= passes <= 16:
+                return {**data, "pass_headers": [f"pass_{idx}" for idx in range(1, passes + 1)]}
+        return data
+
+    @model_validator(mode="after")
+    def validate_pass_headers(self) -> ProtocolConfig:
+        if self.mode == "run_twice":
+            if len(self.pass_headers) < self.passes:
+                raise ValueError(
+                    f"protocol.pass_headers length ({len(self.pass_headers)}) must be >= passes ({self.passes})"
+                )
+            if any(not h.strip() for h in self.pass_headers[: self.passes]):
+                raise ValueError("protocol.pass_headers entries must be non-empty")
+        return self
+
+
+class SubtaskSpec(BaseModel):
+    """Subtask / test group scoring definition for Polygon, Hydro, and QOJ exports."""
+
+    id: int = Field(ge=1)
+    score: int = Field(ge=0, le=1000)
+    name: str | None = None
+    groups: list[str] = Field(default_factory=list)
+    test_indices: list[int] = Field(default_factory=list)
+    dependencies: list[int] = Field(default_factory=list)
+    constraints: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("id", "score", mode="before")
+    @classmethod
+    def reject_bool_scalars(cls, value: Any, info: Any) -> Any:
+        return _reject_bool_value(value, str(info.field_name))
+
+    @field_validator("test_indices", "dependencies", mode="before")
+    @classmethod
+    def reject_bool_lists(cls, value: Any, info: Any) -> Any:
+        return _reject_bool_list(value, str(info.field_name))
+
+    @model_validator(mode="after")
+    def validate_indices(self) -> SubtaskSpec:
+        if any(idx < 1 for idx in self.test_indices):
+            raise ValueError("subtask.test_indices must be 1-based positive integers")
+        return self
+
+
+class EmpiricalComplexityConfig(BaseModel):
+    """Optional empirical complexity sampling and verification settings."""
+
+    dominant_var: str = Field(
+        default="n",
+        description="主导复杂度的规模变量名（如 n / T / k / m）",
+    )
+    scale_points: list[int] | None = Field(
+        default=None,
+        description="显式采样点序列（如 [12, 14, 16, 18, 20] 或 [1000, 5000, 20000, 100000]）",
+    )
+    generator_args_template: str | None = Field(
+        default=None,
+        description="自定义 gen 传参模板（如 '{seed} 2 1000000000 1000000000 {T} {T}'）",
+    )
+    extra_vars: dict[str, Any] = Field(
+        default_factory=dict,
+        description="传给 MultiScaleSampler.format_generator_command 的额外变量（如 type/t_min/t_max）",
+    )
+    scale_mode: Literal["auto", "linear", "exponential", "log"] = Field(
+        default="auto",
+        description="自动采样点分布策略：auto / linear / exponential / log",
+    )
+    metric: Literal["auto", "cpu_time_ms", "queries"] = Field(
+        default="auto",
+        description="实证拟合指标：auto（交互题自动优先 queries）/ cpu_time_ms / queries",
+    )
+    max_value: int | None = Field(
+        default=None,
+        ge=1,
+        description="主导变量的最大值（缺省时自动从 constraints 中提取）",
+    )
+
+    @field_validator("dominant_var", mode="before")
+    @classmethod
+    def validate_dominant_var(cls, value: Any) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("empirical_complexity.dominant_var must be a non-empty string")
+        cleaned = value.strip()
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", cleaned):
+            raise ValueError(
+                f"empirical_complexity.dominant_var must be a valid identifier: {value!r}"
+            )
+        return cleaned
+
+    @field_validator("max_value", mode="before")
+    @classmethod
+    def reject_bool_max_value(cls, value: Any) -> Any:
+        return _reject_bool_value(value, "empirical_complexity.max_value")
+
+    @field_validator("scale_points", mode="before")
+    @classmethod
+    def validate_scale_points(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        _reject_bool_list(value, "empirical_complexity.scale_points")
+        if not isinstance(value, list) or len(value) < 2:
+            raise ValueError("empirical_complexity.scale_points must contain at least 2 positive integers")
+        out: list[int] = []
+        for item in value:
+            if not isinstance(item, int) or item < 1:
+                raise ValueError("empirical_complexity.scale_points elements must be positive integers")
+            out.append(item)
+        return sorted(set(out))
+
+    @field_validator("generator_args_template", mode="before")
+    @classmethod
+    def validate_template(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip() or "\x00" in value:
+            raise ValueError("empirical_complexity.generator_args_template must be a non-empty string")
+        return value.strip()
+
 
 class QualityGates(BaseModel):
     require_stress_passed: bool = True
@@ -30,6 +258,17 @@ class QualityGates(BaseModel):
     require_wrong_solution_kill: bool = False
     require_validator_check: bool = True
     min_limit_case_ratio: float = Field(default=0.5, ge=0, le=1)
+    wrong_tle_kill_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        le=5.0,
+        description="wrong_solution_kill 逻辑 TLE 判定阈值（相对 time_limit_ms 倍数，默认 1.0）",
+    )
+    wrong_slowdown_kill_ratio: float | None = Field(
+        default=None,
+        gt=1.0,
+        description="可选：当错解相对标程耗时倍率达到该值（且绝对耗时 >= 50ms）时按相对耗时判定击杀",
+    )
 
 
 class AuditGates(BaseModel):
@@ -54,6 +293,9 @@ class DifficultyProfile(BaseModel):
 class AutoCodeManifest(BaseModel):
     schema_version: str = "1.0"
     problem_name: str
+    problem_type: ProblemType = "standard"
+    oracle_mode: OracleMode = "brute"
+    protocol: ProtocolConfig | None = None
     interactive: bool = False
     special_judge: bool = Field(
         default=False,
@@ -69,23 +311,165 @@ class AutoCodeManifest(BaseModel):
     )
     time_limit_ms: int = 2000
     memory_limit_mb: int = 256
+    compiler: str | None = Field(
+        default=None,
+        description="可选自定义 C++ 编译器路径或命令（如 g++-14 / /opt/homebrew/bin/g++-14）；缺省为 g++",
+    )
     statement_path: str = "statements/README.md"
     tutorial_path: str = "statements/tutorial.md"
     constraints: dict[str, Any] = Field(default_factory=dict)
+    empirical_complexity: EmpiricalComplexityConfig | None = None
     solutions: list[SolutionEntry] = Field(default_factory=list)
     case_plan: list[CasePlanItem] = Field(default_factory=list)
+    subtasks: list[SubtaskSpec] = Field(default_factory=list)
     quality_gates: QualityGates = Field(default_factory=QualityGates)
     audit_gates: AuditGates = Field(default_factory=AuditGates)
     difficulty: DifficultyProfile = Field(default_factory=DifficultyProfile)
 
+    @field_validator("compiler", mode="before")
+    @classmethod
+    def validate_compiler(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("compiler must be a string")
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if "\x00" in cleaned or "\n" in cleaned or "\r" in cleaned:
+            raise ValueError("compiler contains invalid control characters")
+        return cleaned
+
+    @field_validator("statement_path", "tutorial_path", mode="before")
+    @classmethod
+    def validate_doc_paths(cls, value: Any, info: Any) -> str:
+        res = _validate_safe_rel_path(value, str(info.field_name))
+        if res is None:
+            raise ValueError(f"{info.field_name} must be a non-empty relative path")
+        return str(res)
+
     @model_validator(mode="before")
     @classmethod
-    def normalize_stress_checker_bidirectional(cls, data: Any) -> Any:
-        """无 checker 对拍工作流时忽略误设的 stress_checker_bidirectional。"""
+    def normalize_problem_type_and_checker_flags(cls, data: Any) -> Any:
+        """统一归一化 problem_type / interactive / special_judge / protocol 与 checker 双向对拍标志。"""
         if not isinstance(data, dict):
             return data
-        if data.get("stress_checker_bidirectional") and not (
-            bool(data.get("special_judge")) and data.get("stress_comparison") == "checker"
+        out = dict(data)
+        explicit_type = out.get("problem_type")
+
+        interactive_explicit = "interactive" in out
+        spj_explicit = "special_judge" in out
+        raw_interactive = out.get("interactive", False)
+        raw_spj = out.get("special_judge", False)
+        if interactive_explicit and not isinstance(raw_interactive, bool):
+            raise ValueError("interactive must be a boolean")
+        if spj_explicit and not isinstance(raw_spj, bool):
+            raise ValueError("special_judge must be a boolean")
+
+        interactive_flag = raw_interactive if interactive_explicit else False
+        spj_flag = raw_spj if spj_explicit else False
+
+        if explicit_type is None:
+            if interactive_flag and spj_flag:
+                raise ValueError("conflicting interactive=True and special_judge=True")
+            if interactive_flag:
+                out["problem_type"] = "interactive"
+            elif spj_flag:
+                out["problem_type"] = "spj"
+            else:
+                out["problem_type"] = "standard"
+        else:
+            if explicit_type == "interactive":
+                if interactive_explicit and not interactive_flag:
+                    raise ValueError("conflicting problem_type='interactive' and interactive=False")
+                if spj_explicit and spj_flag:
+                    raise ValueError("conflicting problem_type='interactive' and special_judge=True")
+                out["interactive"] = True
+                out["special_judge"] = False
+            elif explicit_type == "communication":
+                if interactive_explicit and interactive_flag:
+                    raise ValueError("conflicting problem_type='communication' and interactive=True")
+                if spj_explicit and spj_flag:
+                    raise ValueError("conflicting problem_type='communication' and special_judge=True")
+                out["interactive"] = False
+                out["special_judge"] = False
+            elif explicit_type == "spj":
+                if interactive_explicit and interactive_flag:
+                    raise ValueError("conflicting problem_type='spj' and interactive=True")
+                if spj_explicit and not spj_flag:
+                    raise ValueError("conflicting problem_type='spj' and special_judge=False")
+                out["interactive"] = False
+                out["special_judge"] = True
+            elif explicit_type == "standard":
+                if interactive_explicit and interactive_flag:
+                    raise ValueError("conflicting problem_type='standard' and interactive=True")
+                if spj_explicit and spj_flag:
+                    raise ValueError("conflicting problem_type='standard' and special_judge=True")
+                out["interactive"] = False
+                out["special_judge"] = False
+
+        ptype = out.get("problem_type")
+        if ptype == "interactive" and out.get("protocol") is None:
+            out["protocol"] = {"mode": "interactive_1v1"}
+        elif ptype == "communication" and out.get("protocol") is None:
+            out["protocol"] = {"mode": "run_twice"}
+
+        if out.get("stress_checker_bidirectional") and not (
+            bool(out.get("special_judge")) and out.get("stress_comparison") == "checker"
         ):
-            return {**data, "stress_checker_bidirectional": False}
-        return data
+            out["stress_checker_bidirectional"] = False
+
+        return out
+
+    @model_validator(mode="after")
+    def validate_protocol_and_subtasks(self) -> AutoCodeManifest:
+        if self.problem_type in {"standard", "spj"}:
+            if self.protocol is not None:
+                raise ValueError(
+                    f"protocol is only allowed for interactive or communication problems, not {self.problem_type!r}"
+                )
+            if self.oracle_mode == "interactor_only":
+                raise ValueError(
+                    f"oracle_mode='interactor_only' requires interactive or communication problem, not {self.problem_type!r}"
+                )
+        elif self.problem_type == "interactive":
+            if self.protocol is not None and self.protocol.mode != "interactive_1v1":
+                raise ValueError(
+                    f"interactive problem requires protocol.mode='interactive_1v1', got {self.protocol.mode!r}"
+                )
+        elif self.problem_type == "communication":
+            if self.protocol is None or self.protocol.mode not in _COMMUNICATION_MODES:
+                actual = self.protocol.mode if self.protocol else None
+                raise ValueError(
+                    f"communication problem requires protocol.mode in {sorted(_COMMUNICATION_MODES)}, got {actual!r}"
+                )
+
+        dep_graph: dict[int, list[int]] = {}
+        for sub in self.subtasks:
+            if sub.id in dep_graph:
+                raise ValueError(f"duplicate subtask id: {sub.id}")
+            dep_graph[sub.id] = list(sub.dependencies)
+        for sub_id, deps in dep_graph.items():
+            for dep in deps:
+                if dep == sub_id:
+                    raise ValueError(f"subtask {sub_id} cannot depend on itself")
+                if dep not in dep_graph:
+                    raise ValueError(f"subtask {sub_id} depends on unknown subtask id {dep}")
+
+        # 3-color DFS cycle detection (0=unvisited, 1=visiting, 2=visited)
+        color: dict[int, int] = dict.fromkeys(dep_graph, 0)
+
+        def _dfs(node: int) -> None:
+            color[node] = 1
+            for nxt in dep_graph[node]:
+                if color[nxt] == 1:
+                    raise ValueError(f"cyclic subtask dependency involving subtask {nxt}")
+                if color[nxt] == 0:
+                    _dfs(nxt)
+            color[node] = 2
+
+        for sub_id in dep_graph:
+            if color[sub_id] == 0:
+                _dfs(sub_id)
+
+        return self

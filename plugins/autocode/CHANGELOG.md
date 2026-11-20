@@ -5,12 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [3.2.0] - 2026-11-20
+
+### Added
+
+- **Antigravity (`agy`) 薄壳插件与多目标分发打包**：
+  - 新增 `.antigravity-plugin/plugin.json`、根目录 `mcp_config.json` 与 `rules/AGENTS.md`，共享全部 22 个 MCP 工具、Skills 与 server 级工作流门禁。
+  - `scripts/build_plugin_bundle.py` 升级支持 `--target marketplace|agy|dsh` 多目标可复现构建与 `--check` 一致性校验（`agy` 目标在 bundle 根目录输出 `plugin.json`、`mcp_config.json`、`rules/AGENTS.md`、`agents/`、`assets/` 与 `skills/`）；`scripts/sync_plugin_version.py` 扩展同步四宿主 manifest 版本。
+- **题目模型演进（交互、通信与子任务）**：
+  - `AutoCodeManifest` 新增 `problem_type`（`standard` | `spj` | `interactive` | `communication`）、`protocol`（`ProtocolConfig`：`interactive_1v1` / `run_twice` / `multi_process` / `grader_linked`、`passes`、`pass_headers`、`max_bits`、`max_bytes`、`max_rounds`、`max_queries`、`communicator_file`、`grader_file`、`header_file`、`participant_solutions`）、`oracle_mode`（`brute` | `interactor_only` | `reference_solutions`）与 `subtasks`（`SubtaskSpec`：分值、约束、依赖与测试映射）。
+  - 工作流门禁适配交互/通信题：`oracle_mode != "brute"` 时可跳过 `brute` 强门禁；允许可选运行 `validator_build` 校验 `.in` 输入。
+- **统一评测引擎 `JudgeRunner` 与端到端交互题工作流**：
+  - 新增 `src/autocode_mcp/utils/judge_runner.py`（`StandardRunner`、`CheckerRunner`、`InteractiveRunner`），统一实现双进程双向管道交互、计算后死锁检测、仅针对选手进程的 CPU/RSS 限制、崩溃转 `RE` 判定与全路径清理。
+  - 贯通交互题全链路：`interactor_build` 真实管道自测、`solution_run`、`stress_test_run`、`problem_validate`、`problem_generate_tests`、`problem_verify_tests`、实证复杂度校验与真实 C++ 端到端测试。
+- **原生通信题引擎 `CommunicationRunner`**：
+  - 新增 `src/autocode_mcp/utils/communication_runner.py`，原生支持三类通信模式：
+    - `run_twice`：物理多进程隔离 + 每阶段独立临时工作目录 + canonical 4 参数 testlib `registerTestlibCmd` + `AUTOCODE_COMM_STAGE`/`AUTOCODE_COMM_ROLE` 环境变量；
+    - `grader_linked`：多源码联合编译（`extra_sources` + 本地头文件变更失效缓存）与 grader 判分/`RE` 消歧；
+    - `multi_process`：K 方并发进程行级复用协议（`TO`/`CLOSE`/`FROM`/`EOF`，4 MiB 行上限与死锁检测）。
+  - 新增内置模板 `communicator_run_twice_template.cpp`、`grader_template.cpp`、`problem_h_template.h` 与完整示例 `examples/communication-sample/`。
+  - 全链路支持通信预算（`max_bits`/`max_bytes`/`max_queries`/`max_rounds`）强制校验与 `problem_audit` 的 `communication_metrics` 利用率汇总。
+- **多 OJ 导出与独立题包只读审计**：
+  - 新增 `src/autocode_mcp/utils/exporters.py`：`problem_pack_polygon` 新增可选 `export_formats`（`polygon` | `hydro` | `qoj`），支持 Polygon `<groups>`/`<dependencies>`/`<tests>` 子任务 XML、Hydro `exports/hydro/`（`problem.yaml`、`problem_zh.md`、`testdata/config.yaml`）与 QOJ/UOJ `exports/qoj/`（`problem.conf`、按子任务连续重排的 `data/1.in..N.in`、`two_stage`/`with_implementer`/`interaction_mode`）。
+  - `problem_audit` 新增 `standalone=True` 与 CLI `autocode-audit --standalone`，支持对无 `.autocode/` 的外部 Polygon/Hydro/QOJ 题包执行零写入只读实时校验。
+
+### Fixed
+
+- **核心质量与安全修复**：
+  - 修复实证复杂度采样与 OS 底噪防护、静态循环/算法复杂度启发式、Polygon XML 同步、`file_save` 细粒度门禁失效与 macOS `realpath` 路径断言。
+  - 统一 `checker_judge.verdict_from_testlib_rc` 映射（含 `7 -> PC`）；修正 `interactor_template.cpp` 与文档中 `registerInteraction` 的流语义（向选手发送须用 `std::cout` + `std::flush`，`tout` 写诊断输出文件）。
+  - 修复 `problem_audit._require_special_artifact_gates` 误覆盖 `workflow["verify_signals"]` 导致交互/SPJ 题审计后打包失败的缺陷。
+  - 加固全部 manifest 衍生路径（`solutions`、`participant_solutions`、communicator/grader/header 与导出目标目录）的路径穿越与符号链接逃逸防护。
+
+## [3.1.0] - 2026-09-19
+
+### Added
+
+- **多规模阶梯数据采样与经验复杂度拟合**：
+  - 新增 `MultiScaleSampler`（多规模阶梯数据采样器），支持自适应 5 点阶梯采样，适配多项式、小规模多项式与指数级规模，杜绝采样点倒挂；支持 testlib 命令行规范参数与多测极端数据分布生成。
+  - 新增 `DynamicExecutionMonitor`（动态执行监控器），采集纯 CPU 耗时（`utime + stime`）与物理内存，测量并扣除原生系统启动底噪；支持交互题双向匿名管道并发调度与独立 CPU 耗时核算；完善进程树深度回收与异常清理。
+  - 新增 `EmpiricalRatioAnalyzer`（经验倍率拟合分析器），采用对数线性回归拟合幂指数 $\alpha$ 与判定系数 $R^2$；引入动态理论期望倍率与自适应容差校验；支持处理器缓存容量跨越保护（Cache Jump Protection）；支持阶乘复杂度 $O(n!)$ 校验。
+  - 重构 `complexity`、`solution_audit` 与 `audit` 工具层：解法审计与全量审计接入多规模经验拟合结果与质量信号门禁，未通过时追加高优先级阻断与修复指引。
+- **DeepSeek Harness (DSH) 插件生态支持**：
+  - 新增 `.dsh-plugin/package.json`、`.dsh-plugin/cordis.patch.yml`、`.dsh-plugin/index.js`，支持在 DSH 会话中挂载 AutoCode 作为 MCP 服务。
+  - 通过 `dsh-agent-instructions` 扩展机制将工作区指导规范与质量门禁自动注入大语言模型系统提示词上下文。
+- **动态评测套件扩充**：
+  - 新增大文件流式行分页、字节切片寻道与 UTF-8 边界自适应对齐单元测试。
+  - 新增符号链接越界访问与路径遍历拦截测试。
+  - 新增内存超限（MLE）状态识别与字段透传测试。
+  - 新增浮点数得分保留与多级确定性决胜排序测试。
+
+### Changed
+
+- **确定性算法竞赛出题工具链重构与安全加固**：
+  - `file_ops`：`FileReadTool` 实现流式行分页读取与字节定位寻道，引入 UTF-8 多字节字符边界校准机制（最多向前延伸 3 字节消除截断乱码）；统一写入显式指定 `newline='\n'`；针对相对路径强制要求提供 `problem_dir` 参数，统一调用 `os.path.realpath` 彻底防御路径穿越与符号链接逃逸。
+  - `compiler` / `process`：编译子进程配置 `start_new_session=True` 隔离独立会话；进程深度回收统一调用 `terminate_pid_tree` 结合 `psutil.Process.children(recursive=True)` 递归枚举终止后代进程树，彻底杜绝孤儿进程与文件描述符泄漏；引入 `-isystem` 隔离第三方模板标头目录；临时文件读取配置 10MB 安全上限；在 Linux 环境下准确识别内核终止信号与 `std::bad_alloc` 异常，透传 `memory_limit_exceeded` 状态。
+  - `validator`：`ValidatorBuildTool` 增加无测试用例场景防护，核验 `inf.readEof()` 标记；`ValidatorSelectTool` 保留浮点得分精度（`-float(score)` 消除整型截断），实施得分降序、代码长度升序、ID 字典序与二进制路径字典序的四级确定性稳定排序。
+  - `test_verify`：实施单测试点动态比例超时模型 `max(0.1, float(manifest.time_limit_ms) / 1000.0 * 1.5)`，缺省时限设置 5.0 秒上限；针对错解预期失败用例（`exp == "fail"`）引入首个非 AC 测试点命中即提前短路机制。
+  - `audit`：`next_actions` 统一输出包含 `tool_name`、`action`、`arguments`、`priority` 字段的规范字典，补齐题面一致性门禁动作联动建议。
+  - `interactor`：首个任务判定完成后显式取消挂起的未完成协程，释放调度资源。
+  - `build_all`：引入 `get_exe_extension()` 平台可执行文件后缀彻底清理过期二进制。
+
 ## [3.0.0] - 2026-08-02
 
 ### Breaking Changes
 
 - 工作流门禁下沉到 MCP server：存在 `.autocode/manifest.json` 或运行期状态的题目目录现在由 server 直接拒绝乱序调用；Claude hooks 只负责提前提示，Codex 不依赖 hooks。
-- 分发契约从 Claude Code plugin 扩展为 Claude Code + Codex plugin。Codex 使用 `.codex-plugin/plugin.json`、共享 Skills、MCP server 和 marketplace bundle；不再假设 Claude 专有 hooks 或 Agent 能力存在。
+- 分发规范从 Claude Code plugin 扩展为 Claude Code + Codex plugin。Codex 使用 `.codex-plugin/plugin.json`、共享 Skills、MCP server 和 marketplace bundle；不再假设 Claude 专有 hooks 或 Agent 能力存在。
 
 ### Features
 
@@ -30,14 +93,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
-- MCP server 移除 `prompts` 与 `resources` 能力面（原公开 MCP 契约的一部分）：删除对应模块与 handler（`list_prompts` / `get_prompt` / `list_resources` / `read_resource`），仅保留 22 个 Tools。依赖这些端点的外部脚本或裸 MCP 客户端需迁移到 Skills 或 Tools。
-- **题目 manifest 迁移到 `.autocode/manifest.json`**：题目级 manifest 从题目根的 `autocode.json` 改为 `.autocode/manifest.json`。已存在的题目根 `autocode.json` 不再被读取，需迁移到 `.autocode/manifest.json`（字段不变）。`problem_create` 现在初始化 `.autocode/manifest.json` 而非 `autocode.json`。
+- MCP server 移除 `prompts` 与 `resources` 能力面（原公开 MCP 接口定义规范的一部分）：删除对应模块与 handler（`list_prompts` / `get_prompt` / `list_resources` / `read_resource`），仅保留 22 个 Tools。依赖这些端点的外部脚本或裸 MCP 客户端需迁移到 Skills 或 Tools。
+- **题目 manifest 迁移到 `.autocode/manifest.json`**：题目级 manifest 从题目根的 `autocode.json` 改为 `.autocode/manifest.json`。已存在的题目根 `autocode.json` 不再被读取，需迁移到 `.autocode/manifest.json`（字段不变）。`problem_create` 现在初始化 `.autocode/manifest.json`（替代历史 `autocode.json` 路径）。
 
 ### Features
 
 - **CC-first 单一分发**
   - 移除 PyPI 发布与 `uvx` 运行路径：`.mcp.json` 改为 `command: uv, args: ["run", "autocode-mcp"]`，README 移除 PyPI 徽章与发布叙述，仅保留 Claude Code plugin 与本地开发。
-  - MCP server 收敛为纯 Tools：删除 `prompts` 与 `resources` 模块及对应 handler（`list_prompts` / `get_prompt` / `list_resources` / `read_resource`），`server.py` 清理相关 `mcp.types` 导入；22 个工具签名不变（对外契约保留）。
+  - MCP server 收敛为纯 Tools：删除 `prompts` 与 `resources` 模块及对应 handler（`list_prompts` / `get_prompt` / `list_resources` / `read_resource`），`server.py` 清理相关 `mcp.types` 导入；22 个工具签名不变（对外接口定义保留）。
   - README 移除 Cursor / OpenCode（裸 MCP 客户端）使用段落，文档仅面向 Claude Code plugin 与本地开发。
 
 ### Improvements
