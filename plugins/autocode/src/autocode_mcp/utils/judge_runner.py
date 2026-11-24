@@ -25,7 +25,7 @@ import psutil
 
 from .checker_judge import run_testlib_checker, verdict_from_testlib_rc
 from .execution_monitor import DynamicExecutionMonitor
-from .process import terminate_pid_tree
+from .process import disable_posix_core_dumps, terminate_pid_tree
 
 __all__ = [
     "CheckerRunner",
@@ -403,19 +403,26 @@ class InteractiveRunner:
             popen_kwargs: dict[str, Any] = {}
             if sys.platform != "win32":
                 popen_kwargs["start_new_session"] = True
+                popen_kwargs["preexec_fn"] = disable_posix_core_dumps
 
             wall_start = time.perf_counter()
-            interactor_proc = await asyncio.create_subprocess_exec(
-                abs_int,
-                in_path,
-                out_path,
-                ans_path,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=abs_cwd,
-                **popen_kwargs,
-            )
+            try:
+                interactor_proc = await asyncio.create_subprocess_exec(
+                    abs_int,
+                    in_path,
+                    out_path,
+                    ans_path,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=abs_cwd,
+                    **popen_kwargs,
+                )
+            except OSError as exc:
+                return JudgeResult(
+                    verdict="FAIL",
+                    detail=f"Failed to launch interactor binary {interactor_exe}: {exc}",
+                )
             try:
                 solution_proc = await asyncio.create_subprocess_exec(
                     abs_sol,
@@ -424,6 +431,16 @@ class InteractiveRunner:
                     stderr=asyncio.subprocess.PIPE,
                     cwd=abs_cwd,
                     **popen_kwargs,
+                )
+            except OSError as exc:
+                await terminate_pid_tree(interactor_proc.pid)
+                try:
+                    await asyncio.wait_for(interactor_proc.wait(), timeout=1.0)
+                except Exception:
+                    pass
+                return JudgeResult(
+                    verdict="FAIL",
+                    detail=f"Failed to launch solution binary {solution_exe}: {exc}",
                 )
             except BaseException:
                 await terminate_pid_tree(interactor_proc.pid)

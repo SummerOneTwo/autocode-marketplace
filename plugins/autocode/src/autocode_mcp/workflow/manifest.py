@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from ..runtime_store import RUNTIME_DIR_NAME
 from .models import (
+    AuditGates,
     AutoCodeManifest,
     CasePlanItem,
     OracleMode,
@@ -43,6 +45,8 @@ def default_manifest(
     problem_type: ProblemType | None = None,
     protocol_mode: ProtocolMode | None = None,
     oracle_mode: OracleMode = "brute",
+    time_limit_ms: int | None = None,
+    memory_limit_mb: int | None = None,
 ) -> AutoCodeManifest:
     if problem_type is not None and interactive and problem_type != "interactive":
         raise ValueError(
@@ -84,6 +88,21 @@ def default_manifest(
     quality_gates = QualityGates(
         require_validator_check=resolved_type not in ("interactive", "communication"),
     )
+    comm_mode_eff = (protocol_mode or "run_twice") if resolved_type == "communication" else None
+    audit_gates = AuditGates(
+        require_validator_self_test=False,
+        require_checker_self_test=(resolved_type == "spj"),
+        require_interactor_self_test=(
+            resolved_type == "interactive"
+            or (resolved_type == "communication" and comm_mode_eff != "grader_linked")
+        ),
+    )
+
+    manifest_kwargs: dict[str, Any] = {}
+    if time_limit_ms is not None:
+        manifest_kwargs["time_limit_ms"] = time_limit_ms
+    if memory_limit_mb is not None:
+        manifest_kwargs["memory_limit_mb"] = memory_limit_mb
 
     return AutoCodeManifest(
         problem_name=problem_name,
@@ -94,7 +113,9 @@ def default_manifest(
         special_judge=(resolved_type == "spj"),
         stress_comparison="checker" if resolved_type == "spj" else "exact",
         quality_gates=quality_gates,
+        audit_gates=audit_gates,
         solutions=solutions,
+        **manifest_kwargs,
         case_plan=[
             CasePlanItem(
                 name="tiny-1",
@@ -175,8 +196,21 @@ def load_manifest(problem_dir: str) -> AutoCodeManifest | None:
 
 
 def save_manifest(problem_dir: str, manifest: AutoCodeManifest) -> Path:
+    root = Path(problem_dir).resolve()
+    autocode_dir = Path(problem_dir) / ".autocode"
+    if autocode_dir.is_symlink():
+        raise ValueError(f"refusing to write manifest through symlinked directory: {autocode_dir}")
     path = manifest_path(problem_dir)
+    if path.is_symlink():
+        raise ValueError(f"refusing to write manifest through symlink: {path}")
+    if path.is_dir():
+        raise ValueError(f"refusing to overwrite directory at manifest path: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        resolved_parent = path.parent.resolve()
+        resolved_parent.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"manifest path escapes problem directory: {path}") from exc
     path.write_text(
         json.dumps(manifest.model_dump(mode="json"), ensure_ascii=False, indent=2),
         encoding="utf-8",

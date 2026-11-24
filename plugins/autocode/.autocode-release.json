@@ -1,22 +1,22 @@
 {
   "name": "autocode",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "source_repository": "https://github.com/SZTU-ACM/AutoCode",
   "source_fingerprint": {
-    ".claude-plugin": "adc1172994fafc02eb8cf85fc868d528fe9a7e97243fc380401495f8758ee819",
-    ".codex-plugin": "4df63f69778b3e87a0815e41ca21894ea48a0b4795dc9805b9323d5df1cb7ef3",
+    ".claude-plugin": "022914fc7258c17f03a9f006a4ff017b63c912c78d091ffb9c2ee23808b3ecfa",
+    ".codex-plugin": "7e9a3f3d94ef546206990572b9ace53cf030d46ed74675e7bd0c66b429a72a2e",
     ".mcp.json": "5ae3b1d05f87638b7f1be2ee48bf6524f16bce903e9e31895fdb1124774cf103",
     "settings.json": "13139917723f8d6590472d6af4c31c86521aa55e637ad095253bdbc2035af20b",
-    "hooks": "65c6c786f28d347b7bafde3ff8d4c603b943cb112c962b57d97db5f92f867ce0",
+    "hooks": "67af85dedc08815b52c9bc2e36698b35b01e62ff9931afe032e72fc683c00ba2",
     "agents": "906ac49fd0f055ac794006558e1690dd84688c79fad59a7277688a910fcfe80b",
-    "skills": "e815943b72cfe69ea8ab87c3ef9f216d261918bed7360ea0f034bf2d68284403",
+    "skills": "0461c3ad5bf016125c1c0f6a13e2392e25eb57b7d28516102b24cffdc0a40c70",
     "scripts": "ef1d275edbc2ba0112d82dfc0e5ac9232250357a0ee55f5a6f2b5fdb55d2c9b9",
-    "src": "0dad5c702e8b7f855c91e419bb528d47658c28d8501a96b9bfe87e999356d9ed",
-    "pyproject.toml": "5ddfb0ff2f39dbfd0ff3499be9ad5eaa0baf3c831bcc749054076f1368b410d7",
-    "uv.lock": "c128a0a5217b1ea8f6593bfd48721b7e1fba10075dc09065a64c2fd77a59e33b",
-    "README.md": "57890700e67d47789e9566111e9fc30789f58b384f0d3bb246d92442489b9e0e",
+    "src": "3a7486166fee4858dc344cc4be14847de8733b92311a65007631460cbd02cc23",
+    "pyproject.toml": "9346b699de9ecea381c2e6436df8278fb5d8846b621739c3c925ee306fcee362",
+    "uv.lock": "83f410714fe1390a495f4281475fbad53b13e4b46e712bdc7a71b5e538299410",
+    "README.md": "281128a50d1154d26cc6dc9363043f30afb11be9cd891e6064ddbf9dd86e2511",
     "TROUBLESHOOTING.md": "3c8d8823aa3546d4491311f9da7aa1d79a5afb159c6d09db6e986df429e01967",
-    "CHANGELOG.md": "6369dc76cb7eb4d9f1ae8ca6ced572902fd4b8913872719d40845e5cc055b091",
+    "CHANGELOG.md": "2c6af6934b9a0beccdd4e2980ceaefa0457fa66f84411c9148d276e41e4e3bf4",
     "LICENSE": "5bc75cba9ef77fef96b9ad8769c3f541b41db40a9607afd1d83294da5c2a4f72"
   }
 }

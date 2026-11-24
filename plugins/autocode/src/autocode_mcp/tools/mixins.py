@@ -90,6 +90,8 @@ class BuildToolMixin:
         timeout: int = 30,
         include_dirs: list[str] | None = None,
         extra_sources: list[str] | None = None,
+        sanitizers: bool = False,
+        extra_flags: list[str] | None = None,
     ) -> CompileResult:
         return await compile_cpp(
             source_path,
@@ -100,6 +102,8 @@ class BuildToolMixin:
             opt_level=opt_level,
             include_dirs=include_dirs,
             extra_sources=extra_sources,
+            sanitizers=sanitizers,
+            extra_flags=extra_flags,
         )
 
     async def build_all(
@@ -120,7 +124,7 @@ class RunToolMixin:
         binary_path: str,
         input_data: str,
         problem_dir: str,
-        solution_type: Literal["sol", "brute"],
+        solution_type: Literal["sol", "brute", "wrong", "reference"],
         timeout: int | None = None,
         memory_mb: int | None = None,
     ) -> RunResult:

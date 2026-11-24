@@ -1,79 +1,59 @@
 # AutoCode Marketplace
 
-Claude Code and Codex marketplace for AutoCode distribution.
+Official multi-host plugin distribution repository for [SZTU-ACM/AutoCode](https://github.com/SZTU-ACM/AutoCode).
 
-This repository is configured for remote HTTPS git installation. The default plugin source is `https://github.com/SZTU-ACM/AutoCode.git`.
+This repository distributes synchronized AutoCode plugin bundles for all four supported AI clients:
 
-The Codex catalog is kept in `.agents/plugins/marketplace.json` and points to the
-versioned local bundle under `plugins/autocode/`. Regenerate that bundle from the
-AutoCode source repository with `scripts/build_plugin_bundle.py` before publishing.
-The dependency-free `scripts/validate_marketplace.py` checks the committed catalog,
-manifests, and provenance metadata in this repository.
+| Client | Path / Catalog | Notes |
+|--------|----------------|-------|
+| **Claude Code** | `.claude-plugin/marketplace.json` | Remote HTTPS git catalog pointing to `https://github.com/SZTU-ACM/AutoCode.git` |
+| **Codex** | `.agents/plugins/marketplace.json` → `plugins/autocode/` | Versioned local bundle built from AutoCode |
+| **DeepSeek Harness (`dsh`)** | `plugins/autocode-dsh/` | Self-contained DSH plugin bundle (`.dsh-plugin/`, `skills/`, `rules/`, `src/`) |
+| **Antigravity (`agy`)** | `plugins/autocode-agy/` | Native Antigravity plugin bundle (`plugin.json`, `mcp_config.json`, `rules/AGENTS.md`, `agents/`, `skills/`, `src/`) |
 
-## Included Plugins
+## Install by Client
 
-- `autocode` from `https://github.com/SZTU-ACM/AutoCode.git`
-
-## Add to Claude Code
-
-```bash
-claude plugin marketplace add ./autocode-marketplace
-```
-
-Or from the parent directory:
+### 1. Claude Code
 
 ```bash
-claude plugin marketplace add c:/userProgram/program/autocode-marketplace
-```
-
-After adding the marketplace, install the plugin:
-
-```bash
+claude plugin marketplace add https://github.com/SummerOneTwo/autocode-marketplace.git
 claude plugin install autocode@autocode-marketplace
 ```
 
-## Add to Codex
-
-From a local checkout, add this repository as a Codex marketplace and install the
-bundle:
+### 2. Codex
 
 ```bash
-codex plugin marketplace add ./autocode-marketplace
+codex plugin marketplace add https://github.com/SummerOneTwo/autocode-marketplace.git
 codex plugin add autocode@autocode-marketplace
 ```
 
-For a remote checkout, replace the path with the published marketplace URL. The
-Codex catalog must be committed together with `plugins/autocode/`.
+### 3. DeepSeek Harness (`dsh`)
 
-## Claude Remote Mode
+```bash
+git clone https://github.com/SummerOneTwo/autocode-marketplace.git
+dsh plugin add ./autocode-marketplace/plugins/autocode-dsh/.dsh-plugin
+```
 
-The marketplace installs plugins from remote HTTPS git sources. For `autocode`, that means the plugin content must be pushed to `https://github.com/SZTU-ACM/AutoCode.git` before marketplace installs can consume the latest version.
+### 4. Antigravity (`agy`)
 
-Codex installs the committed bundle from this repository. Keeping the bundle and
-its `.autocode-release.json` provenance file in sync is required before pushing.
+```bash
+git clone https://github.com/SummerOneTwo/autocode-marketplace.git
+mkdir -p ~/.gemini/config/plugins && rm -rf ~/.gemini/config/plugins/autocode
+cp -R ./autocode-marketplace/plugins/autocode-agy ~/.gemini/config/plugins/autocode
+```
 
-## Local Testing
+## Regenerating Bundles from Source
 
-For local testing only, you can temporarily replace the GitHub source in `.claude-plugin/marketplace.json` with a local plugin path and run validation or installation against a local checkout. That local override should not be committed as the default marketplace mode.
+Run from the `SZTU-ACM/AutoCode` source repository before publishing a new version:
+
+```bash
+uv run python scripts/build_plugin_bundle.py --target marketplace --output ../autocode-marketplace/plugins/autocode
+uv run python scripts/build_plugin_bundle.py --target dsh --output ../autocode-marketplace/plugins/autocode-dsh
+uv run python scripts/build_plugin_bundle.py --target agy --output ../autocode-marketplace/plugins/autocode-agy
+```
 
 ## Validate
 
 ```bash
-claude plugin validate .
 python3 scripts/validate_marketplace.py
-uv run python /root/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/autocode
-```
-
-## Switch To GitHub Distribution Later
-
-The current committed mode is already HTTPS git-based. A plugin entry uses this structure:
-
-```json
-{
-  "name": "autocode",
-  "source": {
-    "source": "url",
-    "url": "https://github.com/SZTU-ACM/AutoCode.git"
-  }
-}
 ```

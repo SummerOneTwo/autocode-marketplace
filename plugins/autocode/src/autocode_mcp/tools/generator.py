@@ -67,7 +67,10 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
             manifest = load_manifest(problem_dir)
         except (ValidationError, OSError, ValueError) as exc:
             return ToolResult.fail(f"invalid or unreadable manifest.json: {exc}")
-        effective_compiler = resolve_effective_compiler(compiler, manifest)
+        try:
+            effective_compiler = resolve_effective_compiler(compiler, manifest)
+        except ValueError as exc:
+            return ToolResult.fail(f"invalid compiler: {exc}")
 
         resolved, err = resolve_source(
             problem_dir,
@@ -147,7 +150,6 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
         type4_blocks = [b["body"] for b in branches4]
         type3_lines = [[b["start_line"], b["end_line"]] for b in branches3]
         type4_lines = [[b["start_line"], b["end_line"]] for b in branches4]
-
         has_type3 = bool(type3_blocks)
         has_type4 = bool(type4_blocks)
         if not has_type3 or not has_type4:
@@ -166,17 +168,20 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
                 res["sample_probe"] = sample_probe
             return res
 
-        norm3 = re.sub(r"\s+", "", " ".join(type3_blocks))
-        norm4 = re.sub(r"\s+", "", " ".join(type4_blocks))
+        joined3 = " ".join(type3_blocks)
+        joined4 = " ".join(type4_blocks)
+        norm3 = re.sub(r"\s+", "", joined3)
+        norm4 = re.sub(r"\s+", "", joined4)
         identical_body = bool(norm3 and norm3 == norm4)
+        tokens3 = re.findall(r"[a-zA-Z_]\w*|\d+|[^\s\w]", joined3)
+        tokens4 = re.findall(r"[a-zA-Z_]\w*|\d+|[^\s\w]", joined4)
         body_similarity = (
-            round(SequenceMatcher(None, norm3, norm4).ratio(), 3)
-            if (norm3 and norm4)
+            round(SequenceMatcher(None, tokens3, tokens4).ratio(), 3)
+            if (tokens3 and tokens4)
             else 0.0
         )
-
-        type3_signals = self._extract_branch_signals(" ".join(type3_blocks))
-        type4_signals = self._extract_branch_signals(" ".join(type4_blocks))
+        type3_signals = self._extract_branch_signals(joined3)
+        type4_signals = self._extract_branch_signals(joined4)
         shared_signals = type3_signals.intersection(type4_signals)
         signal_overlap = (
             len(shared_signals) / max(len(type3_signals.union(type4_signals)), 1)
@@ -207,7 +212,8 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
             )
 
         low_signal_overlap = signal_overlap < 0.35
-        static_similar = identical_body or (body_similarity >= 0.88 and signal_overlap >= 0.75)
+        static_similar_strict = body_similarity >= 0.88 and signal_overlap >= 0.75
+        static_similar_lexical = body_similarity >= 0.88 and low_signal_overlap
 
         passed = True
         severity = "ok"
@@ -220,19 +226,23 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
             reason = (
                 f"type=3 (lines {type3_lines}) and type=4 (lines {type4_lines}) have identical branch bodies"
             )
-        elif static_similar:
-            if low_signal_overlap or runtime_distinct:
-                # 信号重叠明显偏低或实测样本分布已明显不同：降级为 warning 而非硬拦截
+        elif identical_body and runtime_distinct:
+            passed = True
+            severity = "warning"
+            advisory = True
+            reason = (
+                "type=3 and type=4 branch text looks identical, downgraded to warning because "
+                "runtime sample distributions are distinct"
+            )
+        elif static_similar_strict:
+            if runtime_distinct:
+                # 实测样本分布已明显不同：降级为 warning 而非硬拦截
                 passed = True
                 severity = "warning"
                 advisory = True
                 reason = (
                     "static branch text looks similar, downgraded to warning because "
-                    + (
-                        f"signal_overlap={signal_overlap:.3f} < 0.35"
-                        if low_signal_overlap
-                        else "runtime type=3/type=4 sample distributions are distinct"
-                    )
+                    "runtime type=3/type=4 sample distributions are distinct"
                 )
             else:
                 passed = False
@@ -242,12 +252,22 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
                     f"branch logic is too similar (body_similarity={body_similarity:.3f}, "
                     f"signal_overlap={signal_overlap:.3f})"
                 )
-        elif runtime_identical and signal_overlap >= 0.5:
+        elif static_similar_lexical:
+            # 词面相似度高但结构标识符重叠低（例如相似模板调用不同构造器/变量）：仅提示 warning
+            passed = True
+            severity = "warning"
+            advisory = True
+            reason = (
+                "static branch text looks similar, downgraded to warning because "
+                f"signal_overlap={signal_overlap:.3f} < 0.35"
+            )
+        elif runtime_identical and signal_overlap >= 0.5 and body_similarity >= 0.70:
             passed = False
             severity = "error"
             reason = (
                 "runtime probe showed type=3 and type=4 generated identical samples across seeds "
-                f"(signal_overlap={signal_overlap:.3f}, lines type3={type3_lines}, type4={type4_lines})"
+                f"(body_similarity={body_similarity:.3f}, signal_overlap={signal_overlap:.3f}, "
+                f"lines type3={type3_lines}, type4={type4_lines})"
             )
         elif runtime_identical:
             passed = True
@@ -255,7 +275,8 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
             advisory = True
             reason = (
                 "runtime probe produced identical small-scale samples despite distinct branch code "
-                f"(signal_overlap={signal_overlap:.3f}); verify type=4 divergence on target scales"
+                f"(body_similarity={body_similarity:.3f}, signal_overlap={signal_overlap:.3f}); "
+                "verify type=4 divergence on target scales"
             )
 
         overlap_advisory = signal_overlap > 0.9 and passed
@@ -297,7 +318,8 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
         for n_min, n_max in scale_candidates:
             t3: dict[int, str] = {}
             t4: dict[int, str] = {}
-            for seed in seeds:
+            scale_aborted = False
+            for idx, seed in enumerate(seeds):
                 r3 = await run_binary_with_args(
                     binary_path,
                     [str(seed), "3", n_min, n_max, "1", "1"],
@@ -305,6 +327,9 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
                 )
                 if r3.success and (r3.stdout or "").strip():
                     t3[seed] = r3.stdout
+                elif idx == 0:
+                    scale_aborted = True
+                    break
                 r4 = await run_binary_with_args(
                     binary_path,
                     [str(seed), "4", n_min, n_max, "1", "1"],
@@ -312,7 +337,10 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
                 )
                 if r4.success and (r4.stdout or "").strip():
                     t4[seed] = r4.stdout
-            if t3 and t4:
+                elif idx == 0:
+                    scale_aborted = True
+                    break
+            if not scale_aborted and (set(t3) & set(t4)):
                 type3_outputs = t3
                 type4_outputs = t4
                 selected_scale = (n_min, n_max)
@@ -341,7 +369,7 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
             for out in type4_outputs.values()
         }
         output_overlap_ratio = round(
-            len(hashes3 & hashes4) / max(1, min(len(hashes3), len(hashes4))), 3
+            len(hashes3 & hashes4) / max(1, len(hashes3 | hashes4)), 3
         )
 
         feat3 = self._summarize_sample_features(list(type3_outputs.values()))
@@ -390,80 +418,152 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
             ),
         }
 
-    @staticmethod
-    def _skip_ws_and_comments(code: str, pos: int) -> int:
-        n = len(code)
-        while pos < n:
-            ch = code[pos]
-            if ch.isspace():
-                pos += 1
-            elif ch == "/" and pos + 1 < n and code[pos + 1] == "/":
-                nl = code.find("\n", pos + 2)
-                pos = n if nl == -1 else nl + 1
-            elif ch == "/" and pos + 1 < n and code[pos + 1] == "*":
-                end = code.find("*/", pos + 2)
-                pos = n if end == -1 else end + 2
-            else:
-                break
-        return pos
+    _CASE_OR_DEFAULT_RE = re.compile(r"(?:case\s+[A-Za-z0-9_]+\s*:|default\s*:)")
+    _BREAK_RE = re.compile(r"break\s*;")
 
     @staticmethod
-    def _find_matching_delimiter(code: str, open_pos: int, open_ch: str, close_ch: str) -> int:
-        """Scan forward from ``open_pos`` (at ``open_ch``) to the index after its matching ``close_ch``."""
+    def _mask_cpp_non_code(code: str) -> str:
+        """Replace C++ comments, string literals (including raw strings), and char literals
+        with spaces while preserving exact length, newlines, and numeric digit separators."""
         n = len(code)
-        depth = 0
-        i = open_pos
-        in_str = False
-        in_char = False
-        in_line = False
-        in_block = False
+        out: list[str] = [" "] * n
+        i = 0
+
+        def _is_ident_char(ch: str) -> bool:
+            return ch.isalnum() or ch == "_"
+
+        def _is_hex_digit(ch: str) -> bool:
+            return ch in "0123456789abcdefABCDEF"
+
         while i < n:
             ch = code[i]
             nxt = code[i + 1] if i + 1 < n else ""
-            if in_line:
-                if ch == "\n":
-                    in_line = False
-                i += 1
-                continue
-            if in_block:
-                if ch == "*" and nxt == "/":
-                    in_block = False
-                    i += 2
-                else:
-                    i += 1
-                continue
-            if in_str:
-                if ch == "\\" and i + 1 < n:
-                    i += 2
-                else:
-                    if ch == '"':
-                        in_str = False
-                    i += 1
-                continue
-            if in_char:
-                if ch == "\\" and i + 1 < n:
-                    i += 2
-                else:
-                    if ch == "'":
-                        in_char = False
-                    i += 1
-                continue
+
+            # Line comment // ...
             if ch == "/" and nxt == "/":
-                in_line = True
                 i += 2
+                while i < n and code[i] != "\n":
+                    i += 1
+                if i < n:
+                    out[i] = "\n"
+                    i += 1
                 continue
+
+            # Block comment /* ... */
             if ch == "/" and nxt == "*":
-                in_block = True
                 i += 2
+                while i < n:
+                    if code[i] == "*" and i + 1 < n and code[i + 1] == "/":
+                        i += 2
+                        break
+                    if code[i] == "\n":
+                        out[i] = "\n"
+                    i += 1
                 continue
+
+            # Raw string literal: optional u8/u/U/L prefix + R"delim(...)delim"
+            raw_prefix_len = 0
+            if ch == "R" and nxt == '"' and (i == 0 or not _is_ident_char(code[i - 1])):
+                raw_prefix_len = 1
+            elif (
+                ch in ("u", "U", "L")
+                and (i == 0 or not _is_ident_char(code[i - 1]))
+            ):
+                if ch == "u" and nxt == "8" and i + 3 < n and code[i + 2] == "R" and code[i + 3] == '"':
+                    raw_prefix_len = 3
+                elif nxt == "R" and i + 2 < n and code[i + 2] == '"':
+                    raw_prefix_len = 2
+            if raw_prefix_len:
+                delim_start = i + raw_prefix_len + 1
+                paren_pos = code.find("(", delim_start)
+                if paren_pos != -1 and paren_pos - delim_start <= 16 and "\n" not in code[delim_start:paren_pos]:
+                    delim = code[delim_start:paren_pos]
+                    closing = f"){delim}\""
+                    end_pos = code.find(closing, paren_pos + 1)
+                    stop = n if end_pos == -1 else end_pos + len(closing)
+                    for k in range(i, stop):
+                        if code[k] == "\n":
+                            out[k] = "\n"
+                    i = stop
+                    continue
+
+            # Normal string literal "..."
             if ch == '"':
-                in_str = True
                 i += 1
+                while i < n:
+                    c = code[i]
+                    if c == "\\" and i + 1 < n:
+                        if code[i + 1] == "\n":
+                            out[i + 1] = "\n"
+                        i += 2
+                        continue
+                    if c == "\n":
+                        out[i] = "\n"
+                        i += 1
+                        break
+                    i += 1
+                    if c == '"':
+                        break
                 continue
+
+            # Numeric literal (keeps C++14/20 digit separators like 1'000'000 or 0xFF'AA)
+            if (
+                (ch.isdigit() and (i == 0 or not _is_ident_char(code[i - 1])))
+                or (ch == "." and nxt.isdigit() and (i == 0 or not _is_ident_char(code[i - 1])))
+            ):
+                out[i] = ch
+                i += 1
+                while i < n:
+                    c = code[i]
+                    if c.isalnum() or c in "_.":
+                        if c in ("e", "E", "p", "P") and i + 1 < n and code[i + 1] in "+-":
+                            out[i] = c
+                            out[i + 1] = code[i + 1]
+                            i += 2
+                            continue
+                        out[i] = c
+                        i += 1
+                    elif c == "'" and i + 1 < n and _is_hex_digit(code[i + 1]):
+                        out[i] = c
+                        i += 1
+                    else:
+                        break
+                continue
+
+            # Char literal '...'
             if ch == "'":
-                in_char = True
                 i += 1
+                while i < n:
+                    c = code[i]
+                    if c == "\\" and i + 1 < n:
+                        if code[i + 1] == "\n":
+                            out[i + 1] = "\n"
+                        i += 2
+                        continue
+                    if c == "\n":
+                        out[i] = "\n"
+                        i += 1
+                        break
+                    i += 1
+                    if c == "'":
+                        break
                 continue
+
+            out[i] = ch
+            i += 1
+
+        return "".join(out)
+
+    @staticmethod
+    def _find_matching_delimiter_masked(
+        masked: str, open_pos: int, open_ch: str, close_ch: str
+    ) -> int:
+        """Scan forward in comment/literal-masked code from ``open_pos`` to after matching ``close_ch``."""
+        n = len(masked)
+        depth = 0
+        i = open_pos
+        while i < n:
+            ch = masked[i]
             if ch == open_ch:
                 depth += 1
             elif ch == close_ch:
@@ -474,73 +574,27 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
         return n
 
     def _extract_type_branches(self, code: str, type_value: int) -> list[dict[str, Any]]:
-        """提取指定 type 分支的完整代码块与起止行号（避免固定字符截断导致误判）。"""
+        """提取指定 type 分支的完整代码块与起止行号（避免注释/字面量干扰与字符截断）。"""
+        masked = self._mask_cpp_non_code(code)
         patterns = [
-            ("if", rf"type\s*==\s*{type_value}\b"),
+            ("if", rf"\btype\s*==\s*{type_value}\b"),
             ("if", rf"\b{type_value}\s*==\s*type\b"),
             ("case", rf"\bcase\s+{type_value}\s*:"),
         ]
         branches: list[dict[str, Any]] = []
         seen_spans: set[tuple[int, int]] = set()
-        n = len(code)
+        n = len(masked)
 
         for kind, pattern in patterns:
-            for match in re.finditer(pattern, code):
+            for match in re.finditer(pattern, masked):
                 start_line = code.count("\n", 0, match.start()) + 1
                 if kind == "case":
                     body_start = match.end()
-                    # Scan until break;, next top-level case/default, or closing brace of switch
                     depth = 0
                     i = body_start
-                    in_str = in_char = in_line = in_block = False
                     body_end = n
                     while i < n:
-                        ch = code[i]
-                        nxt = code[i + 1] if i + 1 < n else ""
-                        if in_line:
-                            if ch == "\n":
-                                in_line = False
-                            i += 1
-                            continue
-                        if in_block:
-                            if ch == "*" and nxt == "/":
-                                in_block = False
-                                i += 2
-                            else:
-                                i += 1
-                            continue
-                        if in_str:
-                            if ch == "\\" and i + 1 < n:
-                                i += 2
-                            else:
-                                if ch == '"':
-                                    in_str = False
-                                i += 1
-                            continue
-                        if in_char:
-                            if ch == "\\" and i + 1 < n:
-                                i += 2
-                            else:
-                                if ch == "'":
-                                    in_char = False
-                                i += 1
-                            continue
-                        if ch == "/" and nxt == "/":
-                            in_line = True
-                            i += 2
-                            continue
-                        if ch == "/" and nxt == "*":
-                            in_block = True
-                            i += 2
-                            continue
-                        if ch == '"':
-                            in_str = True
-                            i += 1
-                            continue
-                        if ch == "'":
-                            in_char = True
-                            i += 1
-                            continue
+                        ch = masked[i]
                         if ch == "{":
                             depth += 1
                         elif ch == "}":
@@ -548,30 +602,62 @@ class GeneratorBuildTool(Tool, BuildToolMixin):
                                 body_end = i
                                 break
                             depth -= 1
-                        elif depth == 0:
-                            tail = code[i:]
-                            if re.match(r"\b(?:case\s+\d+\s*:|default\s*:)", tail):
+                        elif depth == 0 and (
+                            i == 0 or not (masked[i - 1].isalnum() or masked[i - 1] == "_")
+                        ):
+                            case_m = self._CASE_OR_DEFAULT_RE.match(masked, i)
+                            if case_m:
+                                if not masked[body_start:i].strip():
+                                    # Pure fallthrough (e.g. case 3: case 4: ...): inherit shared body
+                                    body_start = case_m.end()
+                                    i = case_m.end()
+                                    continue
                                 body_end = i
                                 break
-                            break_m = re.match(r"\bbreak\s*;", tail)
+                            break_m = self._BREAK_RE.match(masked, i)
                             if break_m:
-                                body_end = i + break_m.end()
+                                body_end = break_m.end()
                                 break
                         i += 1
                 else:
-                    # Find closing ')' of enclosing if(...) condition
-                    paren_open = code.rfind("(", max(0, match.start() - 120), match.start())
-                    if paren_open != -1:
-                        after_cond = self._find_matching_delimiter(code, paren_open, "(", ")")
-                    else:
-                        after_cond = match.end()
-                    body_start = self._skip_ws_and_comments(code, after_cond)
-                    if body_start < n and code[body_start] == "{":
-                        block_end = self._find_matching_delimiter(code, body_start, "{", "}")
+                    # Scan backward balancing nested parentheses to locate the enclosing if(...)
+                    bal = 0
+                    paren_open = -1
+                    j = match.start() - 1
+                    while j >= 0:
+                        ch = masked[j]
+                        if ch == ")":
+                            bal += 1
+                        elif ch == "(":
+                            if bal == 0:
+                                paren_open = j
+                                break
+                            bal -= 1
+                        elif ch in ";{}":
+                            break
+                        j -= 1
+                    if paren_open == -1:
+                        continue
+                    k = paren_open - 1
+                    while k >= 0 and masked[k].isspace():
+                        k -= 1
+                    if not (
+                        k >= 1
+                        and masked[k - 1 : k + 1] == "if"
+                        and (k - 1 == 0 or not (masked[k - 2].isalnum() or masked[k - 2] == "_"))
+                    ):
+                        continue
+
+                    after_cond = self._find_matching_delimiter_masked(masked, paren_open, "(", ")")
+                    body_start = after_cond
+                    while body_start < n and masked[body_start].isspace():
+                        body_start += 1
+                    if body_start < n and masked[body_start] == "{":
+                        block_end = self._find_matching_delimiter_masked(masked, body_start, "{", "}")
                         body_start += 1
                         body_end = max(body_start, block_end - 1)
                     else:
-                        semi = code.find(";", body_start)
+                        semi = masked.find(";", body_start)
                         body_end = (semi + 1) if semi != -1 else min(n, body_start + 240)
 
                 span = (body_start, body_end)
@@ -663,7 +749,7 @@ class GeneratorRunTool(Tool):
         if val_exe and not os.path.exists(val_exe):
             val_exe = None
 
-        generated_inputs = []
+        generated_inputs: list[dict[str, object]] = []
         signatures = set()  # 用于去重
         generator_failures: list[dict[str, object]] = []
 

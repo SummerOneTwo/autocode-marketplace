@@ -8,8 +8,11 @@ Interactor 工具组 - 交互器。
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import sys
 import tempfile
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -23,7 +26,7 @@ from ..utils.communication_runner import (
 from ..utils.compiler import compile_cpp, resolve_effective_compiler, run_binary_with_args
 from ..utils.judge_runner import InteractiveRunner, JudgeResult
 from ..utils.platform import get_exe_extension
-from ..utils.process import terminate_pid_tree
+from ..utils.process import disable_posix_core_dumps, terminate_pid_tree
 from ..workflow import load_manifest, manifest_is_communication
 from ..workflow.models import AutoCodeManifest
 from .base import Tool, ToolResult, input_schema_from_model
@@ -44,7 +47,7 @@ class InteractorBuildTool(Tool):
 
         基于论文 Algorithm 4 实现:
         1. 保存代码到 problem_dir/files/interactor.cpp
-        2. 编译生成 files/interactor.exe
+        2. 编译生成 files/interactor（Windows 下为 files/interactor.exe）
         3. 可用 interaction_scenarios 按 testlib registerInteraction 约定验证协议判定
         4. 可用 reference_solution_path / mutant_solutions + test_inputs 走真实双向管道验证区分能力
            （reference_solution_path 应指向已编译可执行文件如 solutions/sol；若传入 .cpp 源码路径会自动映射或编译为二进制；若传入 test_inputs 且省略 reference_solution_path，会自动解析已编译的 solutions/sol）
@@ -75,7 +78,10 @@ class InteractorBuildTool(Tool):
         except (ValidationError, OSError, ValueError) as exc:
             return ToolResult.fail(f"invalid or unreadable manifest.json: {exc}")
 
-        effective_compiler = resolve_effective_compiler(compiler, manifest)
+        try:
+            effective_compiler = resolve_effective_compiler(compiler, manifest)
+        except ValueError as exc:
+            return ToolResult.fail(f"invalid compiler: {exc}")
 
         is_communication = manifest is not None and manifest_is_communication(manifest)
         if (
@@ -162,23 +168,36 @@ class InteractorBuildTool(Tool):
                     interaction_scenarios=scenario_report,
                     scenario_accuracy=scenario_report["accuracy"],
                 )
+            autocode_dir = os.path.join(problem_dir, ".autocode")
+            os.makedirs(autocode_dir, exist_ok=True)
+            scen_name = (
+                "communicator_scenarios.json" if is_communication else "interactor_scenarios.json"
+            )
+            with open(os.path.join(autocode_dir, scen_name), "w", encoding="utf-8", newline="\n") as sf:
+                json.dump(interaction_scenarios, sf, ensure_ascii=False, indent=2)
 
         # 若调用方提供了 test_inputs 但未指定 reference_solution_path，
-        # 自动探测默认已编译参考解 solutions/sol{exe_ext}（避免与 mutant_solutions 冲突）。
+        # 自动探测默认已编译参考解 solutions/sol{exe_ext}（避免与 mutant_solutions 冲突，含 .cpp 衍生二进制路径）。
         resolved_ref_arg = reference_solution_path
         if not resolved_ref_arg and test_inputs:
+            exe_ext = get_exe_extension()
             default_sol_bin = safe_resolve_under_root(
-                problem_dir, f"solutions/sol{get_exe_extension()}"
+                problem_dir, f"solutions/sol{exe_ext}"
             )
             if (
                 default_sol_bin
                 and os.path.isfile(default_sol_bin)
                 and (os.name == "nt" or os.access(default_sol_bin, os.X_OK))
             ):
-                mutant_real = {
-                    os.path.normcase(os.path.realpath(m if os.path.isabs(m) else os.path.join(problem_dir, m)))
-                    for m in (mutant_solutions or [])
-                }
+                mutant_real: set[str] = set()
+                for m in mutant_solutions or []:
+                    if not isinstance(m, str) or not m.strip() or "\x00" in m:
+                        continue
+                    raw_m = m if os.path.isabs(m) else os.path.join(problem_dir, m)
+                    mutant_real.add(os.path.normcase(os.path.realpath(raw_m)))
+                    mutant_real.add(os.path.normcase(os.path.realpath(os.path.splitext(raw_m)[0] + exe_ext)))
+                    if exe_ext:
+                        mutant_real.add(os.path.normcase(os.path.realpath(raw_m + exe_ext)))
                 if os.path.normcase(os.path.realpath(default_sol_bin)) not in mutant_real:
                     resolved_ref_arg = default_sol_bin
 
@@ -340,23 +359,39 @@ class InteractorBuildTool(Tool):
         )
 
     @staticmethod
+    def _is_under_root(real_root: str, target_path: str) -> bool:
+        real_target = os.path.realpath(target_path)
+        try:
+            common = os.path.commonpath([real_root, real_target])
+        except ValueError:
+            return False
+        return os.path.normcase(common) == os.path.normcase(real_root)
+
+    @classmethod
     async def _resolve_solution_binary(
+        cls,
         problem_dir: str,
         raw_path: str,
         *,
         compiler: str,
         role_label: str = "Reference solution",
     ) -> tuple[str | None, str | None]:
-        """Resolve a solution path (relative/absolute, binary or .cpp) to an executable binary.
+        """Resolve a solution path (relative/absolute, binary or .cpp) strictly under ``problem_dir``.
 
         If a C++ source file (.cpp/.cc/.cxx/.c++) is supplied, maps to its compiled sibling binary
         when up to date or compiles it automatically instead of executing the source text directly.
         """
+        if not isinstance(raw_path, str) or not raw_path.strip() or "\x00" in raw_path:
+            return None, f"Invalid {role_label.lower()} path: {raw_path!r}"
+
         exe_ext = get_exe_extension()
         source_exts = (".cpp", ".cc", ".cxx", ".c++")
+        real_root = os.path.realpath(problem_dir)
 
         if os.path.isabs(raw_path):
-            candidate = raw_path
+            if not cls._is_under_root(real_root, raw_path):
+                return None, f"{role_label} path escapes problem_dir: {raw_path}"
+            candidate = os.path.realpath(raw_path)
         else:
             candidate_under = safe_resolve_under_root(problem_dir, raw_path)
             if candidate_under is None:
@@ -365,6 +400,12 @@ class InteractorBuildTool(Tool):
 
         if candidate.lower().endswith(source_exts):
             binary_candidate = os.path.splitext(candidate)[0] + exe_ext
+            if os.path.islink(binary_candidate) or not cls._is_under_root(real_root, binary_candidate):
+                return (
+                    None,
+                    f"Derived {role_label.lower()} binary path escapes problem_dir or is a symlink: "
+                    f"{binary_candidate}",
+                )
             src_exists = os.path.isfile(candidate)
             bin_exists = os.path.isfile(binary_candidate)
             bin_exec = bin_exists and (os.name == "nt" or os.access(binary_candidate, os.X_OK))
@@ -398,6 +439,10 @@ class InteractorBuildTool(Tool):
             candidates.append(candidate + exe_ext)
 
         for path in candidates:
+            if os.path.islink(path) and not cls._is_under_root(real_root, path):
+                return None, f"{role_label} path escapes problem_dir via symlink: {raw_path}"
+            if not cls._is_under_root(real_root, path):
+                continue
             if os.path.isfile(path):
                 if os.name != "nt" and not os.access(path, os.X_OK):
                     return (
@@ -406,7 +451,7 @@ class InteractorBuildTool(Tool):
                         f"Pass a compiled executable binary (e.g. solutions/sol{exe_ext}) "
                         "rather than a non-executable or .cpp source file.",
                     )
-                return path, None
+                return os.path.realpath(path), None
 
         return (
             None,
@@ -503,6 +548,10 @@ class InteractorBuildTool(Tool):
                         mp_env["AUTOCODE_COMM_PROCS"] = str(
                             max(2, len(manifest.protocol.participant_solutions))
                         )
+                        mp_popen_kwargs: dict[str, Any] = {}
+                        if sys.platform != "win32":
+                            mp_popen_kwargs["start_new_session"] = True
+                            mp_popen_kwargs["preexec_fn"] = disable_posix_core_dumps
                         proc_mp = await asyncio.create_subprocess_exec(
                             os.path.abspath(interactor_exe),
                             input_file,
@@ -513,6 +562,7 @@ class InteractorBuildTool(Tool):
                             stderr=asyncio.subprocess.PIPE,
                             cwd=temp_dir,
                             env=mp_env,
+                            **mp_popen_kwargs,
                         )
                         try:
                             out_b, err_b = await asyncio.wait_for(

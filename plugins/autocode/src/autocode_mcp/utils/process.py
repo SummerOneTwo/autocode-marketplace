@@ -24,6 +24,17 @@ _logger = logging.getLogger(__name__)
 # POSIX 上优先 SIGKILL；缺失时（理论上不会）回退 SIGTERM。
 POSIX_KILL_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
+_resource: Any = None
+_RLIMIT_CORE: Any = None
+if os.name != "nt":
+    try:
+        import resource as _resource
+
+        _RLIMIT_CORE = getattr(_resource, "RLIMIT_CORE", None)
+    except ImportError:  # pragma: no cover
+        _resource = None
+        _RLIMIT_CORE = None
+
 
 def is_pid_alive(pid: int) -> bool:
     """PID 是否仍存活（已退出 / 僵尸进程视为不存活）。"""
@@ -73,7 +84,7 @@ async def terminate_pid_tree(pid: int) -> tuple[bool, str]:
         except OSError as exc:
             return False, str(exc)
     # POSIX：优先按进程组整树回收（要求子进程以 start_new_session=True 启动）。
-    current_pgid = os.getpgid(0)
+    current_pgid = cast(Any, os).getpgid(0)
     current_pid = os.getpid()
     parent_pid = os.getppid()
 
@@ -108,3 +119,13 @@ async def terminate_pid_tree(pid: int) -> tuple[bool, str]:
         return True, ""
     except OSError as exc:
         return False, str(exc)
+
+
+def disable_posix_core_dumps() -> None:
+    """Disable core dump generation (RLIMIT_CORE=0) in POSIX child processes."""
+    if os.name == "nt" or _resource is None or _RLIMIT_CORE is None:
+        return
+    try:
+        cast(Any, _resource).setrlimit(_RLIMIT_CORE, (0, 0))
+    except (ValueError, OSError):
+        pass

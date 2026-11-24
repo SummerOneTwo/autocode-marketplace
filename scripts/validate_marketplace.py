@@ -1,8 +1,9 @@
-"""Validate the committed Claude/Codex marketplace layout.
+"""Validate the committed multi-host AutoCode marketplace layout.
 
-This check is intentionally dependency-free.  The AutoCode source repository
-owns bundle generation; this repository only verifies that the committed
-catalog points at a complete, self-described bundle.
+This check is intentionally dependency-free. The AutoCode source repository
+owns bundle generation; this repository verifies that the committed catalog
+and all host bundles (Claude Code / Codex, DeepSeek Harness, Antigravity)
+are complete, version-synchronized, and self-described.
 """
 
 from __future__ import annotations
@@ -15,7 +16,10 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / ".agents" / "plugins" / "marketplace.json"
+CLAUDE_CATALOG = ROOT / ".claude-plugin" / "marketplace.json"
 BUNDLE = ROOT / "plugins" / "autocode"
+DSH_BUNDLE = ROOT / "plugins" / "autocode-dsh"
+AGY_BUNDLE = ROOT / "plugins" / "autocode-agy"
 
 
 def load_object(path: Path, errors: list[str]) -> dict[str, Any] | None:
@@ -37,14 +41,47 @@ def require_string(value: Any, label: str, errors: list[str]) -> str | None:
     return value
 
 
+def require_path(path: Path, errors: list[str]) -> None:
+    if not path.exists():
+        errors.append(f"{path.relative_to(ROOT)}: required path is missing")
+
+
 def validate() -> list[str]:
     errors: list[str] = []
     catalog = load_object(CATALOG, errors)
+    claude_catalog = load_object(CLAUDE_CATALOG, errors)
     codex_manifest = load_object(BUNDLE / ".codex-plugin" / "plugin.json", errors)
     claude_manifest = load_object(BUNDLE / ".claude-plugin" / "plugin.json", errors)
     release = load_object(BUNDLE / ".autocode-release.json", errors)
-    if catalog is None or codex_manifest is None or claude_manifest is None or release is None:
+    dsh_manifest = load_object(DSH_BUNDLE / ".dsh-plugin" / "package.json", errors)
+    dsh_release = load_object(DSH_BUNDLE / ".autocode-release.json", errors)
+    agy_manifest = load_object(AGY_BUNDLE / "plugin.json", errors)
+    agy_release = load_object(AGY_BUNDLE / ".autocode-release.json", errors)
+    if any(
+        item is None
+        for item in (
+            catalog,
+            claude_catalog,
+            codex_manifest,
+            claude_manifest,
+            release,
+            dsh_manifest,
+            dsh_release,
+            agy_manifest,
+            agy_release,
+        )
+    ):
         return errors
+
+    assert catalog is not None
+    assert claude_catalog is not None
+    assert codex_manifest is not None
+    assert claude_manifest is not None
+    assert release is not None
+    assert dsh_manifest is not None
+    assert dsh_release is not None
+    assert agy_manifest is not None
+    assert agy_release is not None
 
     if require_string(catalog.get("name"), "catalog.name", errors) != "autocode-marketplace":
         errors.append("catalog.name: expected 'autocode-marketplace'")
@@ -86,6 +123,10 @@ def validate() -> list[str]:
                     errors.append("catalog.plugins[0].policy.authentication: invalid value")
             require_string(entry.get("category"), "catalog.plugins[0].category", errors)
 
+    if require_string(claude_catalog.get("name"), "claude_catalog.name", errors) != "autocode-marketplace":
+        errors.append("claude_catalog.name: expected 'autocode-marketplace'")
+
+    # Validate Claude Code + Codex marketplace bundle
     codex_name = require_string(codex_manifest.get("name"), "Codex manifest name", errors)
     claude_name = require_string(claude_manifest.get("name"), "Claude manifest name", errors)
     if codex_name != "autocode" or claude_name != "autocode":
@@ -102,6 +143,37 @@ def validate() -> list[str]:
     if codex_manifest.get("skills") != "./skills/":
         errors.append("Codex manifest must point at ./skills/")
 
+    # Validate DeepSeek Harness (dsh) bundle
+    dsh_version = require_string(dsh_manifest.get("version"), "DSH package.json version", errors)
+    dsh_release_version = require_string(dsh_release.get("version"), "DSH release.version", errors)
+    if dsh_version != release_version or dsh_release_version != release_version:
+        errors.append(
+            f"DSH bundle version mismatch: package={dsh_version}, release={dsh_release_version}, expected={release_version}"
+        )
+    if not isinstance(dsh_release.get("source_fingerprint"), dict) or ".dsh-plugin" not in dsh_release["source_fingerprint"]:
+        errors.append("DSH release.source_fingerprint: missing '.dsh-plugin' entry")
+    require_path(DSH_BUNDLE / ".dsh-plugin" / "cordis.patch.yml", errors)
+    require_path(DSH_BUNDLE / ".dsh-plugin" / "index.js", errors)
+    require_path(DSH_BUNDLE / "skills", errors)
+    require_path(DSH_BUNDLE / "src" / "autocode_mcp", errors)
+
+    # Validate Antigravity (agy) bundle
+    if require_string(agy_manifest.get("name"), "Antigravity plugin.json name", errors) != "autocode":
+        errors.append("Antigravity plugin.json name must be 'autocode'")
+    agy_version = require_string(agy_manifest.get("version"), "Antigravity plugin.json version", errors)
+    agy_release_version = require_string(agy_release.get("version"), "Antigravity release.version", errors)
+    if agy_version != release_version or agy_release_version != release_version:
+        errors.append(
+            f"Antigravity bundle version mismatch: plugin={agy_version}, release={agy_release_version}, expected={release_version}"
+        )
+    if not isinstance(agy_release.get("source_fingerprint"), dict) or "plugin.json" not in agy_release["source_fingerprint"]:
+        errors.append("Antigravity release.source_fingerprint: missing 'plugin.json' entry")
+    require_path(AGY_BUNDLE / "mcp_config.json", errors)
+    require_path(AGY_BUNDLE / "rules" / "AGENTS.md", errors)
+    require_path(AGY_BUNDLE / "agents", errors)
+    require_path(AGY_BUNDLE / "skills", errors)
+    require_path(AGY_BUNDLE / "src" / "autocode_mcp", errors)
+
     return errors
 
 
@@ -111,7 +183,7 @@ def main() -> int:
         for error in errors:
             print(f"ERROR: {error}")
         return 1
-    print(f"Marketplace layout is valid: {ROOT}")
+    print(f"Marketplace layout is valid (all 3 host bundles synced): {ROOT}")
     return 0
 
 

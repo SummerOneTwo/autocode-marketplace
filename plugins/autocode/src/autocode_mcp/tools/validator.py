@@ -6,6 +6,7 @@ Validator 工具组 - 数据校验器。
 
 from __future__ import annotations
 
+import json
 import os
 
 from pydantic import ValidationError
@@ -31,7 +32,7 @@ class ValidatorBuildTool(Tool, BuildToolMixin):
 
         基于论文 Algorithm 1 实现:
         1. 保存代码到 problem_dir/files/val.cpp
-        2. 编译生成 files/val.exe
+        2. 编译生成 files/val（Windows 下为 files/val.exe）
         3. 运行测试用例验证健壮性
         4. 返回得分和详细结果
 
@@ -66,7 +67,10 @@ class ValidatorBuildTool(Tool, BuildToolMixin):
             manifest = load_manifest(problem_dir)
         except (ValidationError, OSError, ValueError) as exc:
             return ToolResult.fail(f"invalid or unreadable manifest.json: {exc}")
-        effective_compiler = resolve_effective_compiler(compiler, manifest)
+        try:
+            effective_compiler = resolve_effective_compiler(compiler, manifest)
+        except ValueError as exc:
+            return ToolResult.fail(f"invalid compiler: {exc}")
 
         resolved, err = resolve_source(
             problem_dir,
@@ -152,6 +156,18 @@ class ValidatorBuildTool(Tool, BuildToolMixin):
 
         score = correct_count
         total = len(test_cases)
+
+        invalid_fixtures = [
+            {"name": f"validator_tc_{idx}", "input": tc["input"]}
+            for idx, tc in enumerate(test_cases, 1)
+            if tc.get("expected_valid") is False and isinstance(tc.get("input"), str)
+        ]
+        if invalid_fixtures:
+            autocode_dir = os.path.join(problem_dir, ".autocode")
+            os.makedirs(autocode_dir, exist_ok=True)
+            fixtures_path = os.path.join(autocode_dir, "validator_invalid_fixtures.json")
+            with open(fixtures_path, "w", encoding="utf-8", newline="\n") as ff:
+                json.dump(invalid_fixtures, ff, ensure_ascii=False, indent=2)
 
         return ToolResult.ok(
             source_path=compile_source,

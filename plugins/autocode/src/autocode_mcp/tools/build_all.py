@@ -71,7 +71,10 @@ class ProblemBuildAllTool(Tool, BuildToolMixin):
             manifest = load_manifest(problem_dir)
         except (ValidationError, OSError, ValueError) as exc:
             return ToolResult.fail(f"invalid or unreadable manifest.json: {exc}")
-        effective_compiler = resolve_effective_compiler(compiler, manifest)
+        try:
+            effective_compiler = resolve_effective_compiler(compiler, manifest)
+        except ValueError as exc:
+            return ToolResult.fail(f"invalid compiler: {exc}")
 
         extra = [d if os.path.isabs(d) else os.path.join(problem_dir, d) for d in (include_extra_dirs or [])]
         if os.path.isdir(TEMPLATES_DIR):

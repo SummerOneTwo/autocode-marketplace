@@ -21,6 +21,7 @@ if _IS_WINDOWS:
     import win32api
     import win32con
     import win32job
+    import win32process
 
 
 class WinJobObject:
@@ -34,12 +35,12 @@ class WinJobObject:
         job_handle: Job Object 句柄
     """
 
-    def __init__(self, memory_mb: int, timeout_sec: int):
+    def __init__(self, memory_mb: int | float | None, timeout_sec: int | float):
         """初始化 Job Object。
 
         Args:
-            memory_mb: 内存限制（MB）
-            timeout_sec: CPU 时间限制（秒）
+            memory_mb: 内存限制（MB），为 None 时仅启用时间限制与 KILL_ON_JOB_CLOSE（如 Sanitizer 模式）
+            timeout_sec: CPU 时间限制（秒，支持 int 或 float）
 
         Raises:
             RuntimeError: 在非 Windows 平台上调用
@@ -47,22 +48,25 @@ class WinJobObject:
         if not _IS_WINDOWS:
             raise RuntimeError("WinJobObject is only available on Windows")
 
-        self.memory_mb = memory_mb
-        self.timeout_sec = timeout_sec
+        self.memory_mb: int | float | None = memory_mb
+        self.timeout_sec: int | float = timeout_sec
         self.job_handle: int | None = None
         self._create_job_object()
 
     def _create_job_object(self) -> None:
         """创建 Job Object。"""
-        job_name = f"AutoCodeJob_{id(self)}"
-        job = win32job.CreateJobObject(None, job_name)  # type: ignore[func-returns-value]
+        # 使用空名称创建匿名 Job Object（pywin32 CreateJobObject 不接受 None，需传入 ""）
+        job = win32job.CreateJobObject(None, "")  # type: ignore[func-returns-value]
         self.job_handle = job if job is not None else 0
 
         limit_flags = (
             win32job.JOB_OBJECT_LIMIT_PROCESS_TIME
-            | win32job.JOB_OBJECT_LIMIT_JOB_MEMORY
             | win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         )
+        job_memory_limit = 0
+        if self.memory_mb is not None:
+            limit_flags |= win32job.JOB_OBJECT_LIMIT_JOB_MEMORY
+            job_memory_limit = self._set_memory_limit()
 
         extended_limit = {
             "BasicLimitInformation": {
@@ -85,7 +89,7 @@ class WinJobObject:
                 "OtherTransferCount": 0,
             },
             "ProcessMemoryLimit": 0,
-            "JobMemoryLimit": self._set_memory_limit(),
+            "JobMemoryLimit": job_memory_limit,
             "PeakProcessMemoryUsed": 0,
             "PeakJobMemoryUsed": 0,
         }
@@ -102,15 +106,16 @@ class WinJobObject:
         Returns:
             int: 内存限制（字节）
         """
-        return self.memory_mb * 1024 * 1024
+        assert self.memory_mb is not None
+        return max(1, int(round(float(self.memory_mb) * 1024 * 1024)))
 
     def _set_time_limit(self) -> int:
         """设置 CPU 时间限制。
 
         Returns:
-            int: 时间限制（100ns 单位）
+            int: 时间限制（100ns 单位，严格返回 int 满足 Win32 LARGE_INTEGER 契约）
         """
-        return self.timeout_sec * 10_000_000
+        return max(1, int(round(float(self.timeout_sec) * 10_000_000)))
 
     def assign_process(self, pid: int) -> None:
         """将进程分配到 Job Object。
@@ -124,22 +129,72 @@ class WinJobObject:
         if self.job_handle is None:
             raise RuntimeError("Job object not created")
 
+        query_flag = getattr(
+            win32con,
+            "PROCESS_QUERY_LIMITED_INFORMATION",
+            win32con.PROCESS_QUERY_INFORMATION,
+        )
+        process_handle = None
+        can_query_exit = False
         try:
-            process_handle = win32api.OpenProcess(
-                win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE, False, pid
-            )
+            try:
+                process_handle = win32api.OpenProcess(
+                    win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE | query_flag,
+                    False,
+                    pid,
+                )
+                can_query_exit = True
+            except (pywintypes.error, OSError):
+                process_handle = win32api.OpenProcess(
+                    win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE,
+                    False,
+                    pid,
+                )
+
+            if can_query_exit:
+                try:
+                    if win32process.GetExitCodeProcess(process_handle) != win32con.STILL_ACTIVE:
+                        return
+                except (pywintypes.error, OSError):
+                    pass
+
             win32job.AssignProcessToJobObject(self.job_handle, process_handle)
         except pywintypes.error as e:
+            if can_query_exit and process_handle is not None:
+                try:
+                    if win32process.GetExitCodeProcess(process_handle) != win32con.STILL_ACTIVE:
+                        return
+                except (pywintypes.error, OSError):
+                    pass
             raise RuntimeError(f"Failed to assign process {pid} to job object: {e}") from e
         except OSError as e:
+            if can_query_exit and process_handle is not None:
+                try:
+                    if win32process.GetExitCodeProcess(process_handle) != win32con.STILL_ACTIVE:
+                        return
+                except (pywintypes.error, OSError):
+                    pass
             raise RuntimeError(f"Failed to assign process {pid} to job object: {e}") from e
+        finally:
+            if process_handle is not None:
+                try:
+                    win32api.CloseHandle(process_handle)
+                except (pywintypes.error, OSError):
+                    pass
 
     def terminate(self) -> None:
         """终止 Job Object 中的所有进程。"""
         if self.job_handle is not None and self.job_handle != 0:
-            win32job.TerminateJobObject(self.job_handle, 1)
-            win32api.CloseHandle(self.job_handle)
-            self.job_handle = None
+            try:
+                win32job.TerminateJobObject(self.job_handle, 1)
+            except (pywintypes.error, OSError):
+                pass
+            try:
+                win32api.CloseHandle(self.job_handle)
+            except (pywintypes.error, OSError):
+                pass
+            finally:
+                self.job_handle = None
 
     def close(self) -> None:
         """关闭 Job Object 句柄。
@@ -148,8 +203,12 @@ class WinJobObject:
         仍可能终止 Job 中尚未退出的进程。
         """
         if self.job_handle is not None and self.job_handle != 0:
-            win32api.CloseHandle(self.job_handle)
-            self.job_handle = None
+            try:
+                win32api.CloseHandle(self.job_handle)
+            except (pywintypes.error, OSError):
+                pass
+            finally:
+                self.job_handle = None
 
     def __enter__(self) -> WinJobObject:
         """上下文管理器入口。"""

@@ -3,34 +3,75 @@ import re
 from typing import Any
 
 
-def normalize_complexity_expression(expr: str | None) -> str:
+def _extract_balanced_big_o(text: str) -> str:
+    """Extract the inner expression from the first balanced ``O(...)`` group if present."""
+    match = re.search(r"(?:^|[^a-z0-9_])o\(", text)
+    if not match:
+        return text
+    open_pos = match.end() - 1
+    depth = 0
+    for idx in range(open_pos, len(text)):
+        ch = text[idx]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_pos + 1 : idx]
+    return text[open_pos + 1 :]
+
+
+def normalize_complexity_expression(expr: str | None, *, dominant_var: str = "n") -> str:
     if not expr or not isinstance(expr, str):
         return "O(n)"
-    cleaned = expr.strip().lower()
-    cleaned = cleaned.replace("\\log", "log").replace("\\cdot", "*").replace("\\times", "*")
-    cleaned = re.sub(r"\s+", "", cleaned)
-    match = re.search(r"o\((.+)\)", cleaned)
-    if match:
-        inner = match.group(1)
-    else:
-        inner = cleaned
+    cleaned = expr.strip()
+    cleaned = (
+        cleaned.replace("\\Theta", "O")
+        .replace("\\theta", "O")
+        .replace("\\Omega", "O")
+        .replace("\\omega", "O")
+        .replace("\\log_2", "log")
+        .replace("\\log_{2}", "log")
+        .replace("\\log", "log")
+        .replace("\\sqrt", "sqrt")
+        .replace("\\cdot", "*")
+        .replace("\\times", "*")
+    )
+    cleaned = cleaned.replace("{", "").replace("}", "")
+    lowered = cleaned.lower()
+    inner = _extract_balanced_big_o(lowered).strip()
+
+    dom = (dominant_var or "n").strip().lower()
+    if dom.endswith("_max") and len(dom) > 4:
+        dom = dom[:-4]
+    if dom and dom != "n" and re.fullmatch(r"[a-z_][a-z0-9_]*", dom):
+        if not re.search(r"\bn\b", inner):
+            inner = re.sub(rf"\b{re.escape(dom)}\b", "n", inner)
+
+    inner = re.sub(r"\s+", "", inner)
     inner = inner.replace("*", "")
-    inner = inner.replace("log(n)", "logn").replace("sqrt(n)", "sqrtn")
     inner = inner.replace("**", "^")
+    inner = re.sub(r"log_?2\(?n\)?", "logn", inner)
+    inner = inner.replace("log(n)", "logn").replace("sqrt(n)", "sqrtn")
 
     # 映射为标准包含空格形式
     mapping = {
         "1": "O(1)",
         "logn": "O(log n)",
         "log2n": "O(log n)",
+        "sqrtn": "O(sqrt n)",
         "n": "O(n)",
         "nlogn": "O(n log n)",
+        "lognn": "O(n log n)",
         "nsqrtn": "O(n sqrt n)",
+        "sqrtnn": "O(n sqrt n)",
         "n^2": "O(n^2)",
         "n^3": "O(n^3)",
         "2^n": "O(2^n)",
         "n2^n": "O(n 2^n)",
+        "2^nn": "O(n 2^n)",
         "n^22^n": "O(n^2 2^n)",
+        "2^nn^2": "O(n^2 2^n)",
         "3^n": "O(3^n)",
         "n!": "O(n!)",
     }
@@ -42,6 +83,8 @@ class EmpiricalRatioAnalyzer:
         "O(1)": (-0.2, 0.35),
         "O(log n)": (-0.05, 0.65),
         "O(logn)": (-0.05, 0.65),
+        "O(sqrt n)": (0.25, 0.75),
+        "O(sqrtn)": (0.25, 0.75),
         "O(n)": (-0.25, 1.35),
         "O(n log n)": (-0.25, 1.45),
         "O(nlogn)": (-0.25, 1.45),
@@ -71,6 +114,8 @@ class EmpiricalRatioAnalyzer:
             return 1.0
         if normalized_expr in ("O(log n)", "O(logn)"):
             return math.log2(max(2.0, n))
+        if normalized_expr in ("O(sqrt n)", "O(sqrtn)"):
+            return math.sqrt(n)
         if normalized_expr in ("O(n)",):
             return n
         if normalized_expr in ("O(n log n)", "O(nlogn)"):
@@ -95,8 +140,15 @@ class EmpiricalRatioAnalyzer:
         return n
 
     @classmethod
-    def calculate_expected_ratio(cls, claimed_complexity: str, n_from: int, n_to: int) -> float:
-        norm_expr = normalize_complexity_expression(claimed_complexity)
+    def calculate_expected_ratio(
+        cls,
+        claimed_complexity: str,
+        n_from: int,
+        n_to: int,
+        *,
+        dominant_var: str = "n",
+    ) -> float:
+        norm_expr = normalize_complexity_expression(claimed_complexity, dominant_var=dominant_var)
         if norm_expr == "O(n!)":
             if n_from <= 0:
                 n_from = 1
@@ -257,6 +309,56 @@ class EmpiricalRatioAnalyzer:
         return alpha, r2
 
     @classmethod
+    def _check_failed_samples(
+        cls,
+        norm_claimed: str,
+        samples: list[dict[str, Any]],
+        *,
+        fit_metric: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return an immediate failure payload if any sample timed out, MLEd, or errored."""
+        extra: dict[str, Any] = {"fit_metric": fit_metric} if fit_metric else {}
+        for status_val, verdict_name, fitted_label, msg_prefix, advice_prefix in (
+            (
+                "timeout",
+                "timeout_at_extreme",
+                "timeout",
+                "Execution timed out at scale point",
+                "Algorithm execution timed out on",
+            ),
+            (
+                "mle",
+                "mle_at_scale",
+                "mle",
+                "Execution exceeded memory limit (MLE) at scale point",
+                "Algorithm exceeded memory limit on",
+            ),
+            (
+                "runtime_error",
+                "runtime_error_at_scale",
+                "runtime_error",
+                "Execution failed with runtime error at scale point",
+                "Algorithm crashed or returned non-zero status on",
+            ),
+        ):
+            failed = next((s for s in samples if s.get("status") == status_val), None)
+            if failed is not None:
+                return {
+                    "passed": False,
+                    "verdict": verdict_name,
+                    "failure_reason": f"{msg_prefix} (N={failed.get('n')})",
+                    "claimed_complexity": norm_claimed,
+                    "fitted_complexity": fitted_label,
+                    "fitted_alpha": None,
+                    "r_squared": None,
+                    "samples": samples,
+                    "growth_ratios": [],
+                    "remediation_advice": f"{advice_prefix} N={failed.get('n')}.",
+                    **extra,
+                }
+        return None
+
+    @classmethod
     def verify_query_complexity(
         cls,
         claimed_complexity: str,
@@ -264,24 +366,13 @@ class EmpiricalRatioAnalyzer:
         *,
         max_queries: int | None = None,
         time_limit_ms: float = 2000.0,
+        dominant_var: str = "n",
     ) -> dict[str, Any]:
         """Verify interactive query-count scaling (e.g. queries vs log2(n)) instead of noisy pipe CPU time."""
-        norm_claimed = normalize_complexity_expression(claimed_complexity)
-        if samples and samples[-1].get("status") == "timeout":
-            last_sample = samples[-1]
-            return {
-                "passed": False,
-                "verdict": "timeout_at_extreme",
-                "fit_metric": "queries",
-                "failure_reason": f"Execution timed out at extreme test point (N={last_sample.get('n')})",
-                "claimed_complexity": norm_claimed,
-                "fitted_complexity": "timeout",
-                "fitted_alpha": None,
-                "r_squared": None,
-                "samples": samples,
-                "growth_ratios": [],
-                "remediation_advice": f"Interactive execution timed out on N={last_sample.get('n')}.",
-            }
+        norm_claimed = normalize_complexity_expression(claimed_complexity, dominant_var=dominant_var)
+        failed_payload = cls._check_failed_samples(norm_claimed, samples, fit_metric="queries")
+        if failed_payload is not None:
+            return failed_payload
 
         valid_samples = [
             s
@@ -289,14 +380,20 @@ class EmpiricalRatioAnalyzer:
             if s.get("status") == "ok"
             and isinstance(s.get("queries"), int | float)
             and not isinstance(s.get("queries"), bool)
+            and math.isfinite(float(s["queries"]))
             and float(s["queries"]) > 0
+            and isinstance(s.get("n"), int | float)
+            and not isinstance(s.get("n"), bool)
+            and math.isfinite(float(s["n"]))
+            and float(s["n"]) > 1
         ]
-        if len(valid_samples) < 2:
+        distinct_n = {float(s["n"]) for s in valid_samples}
+        if len(valid_samples) < 2 or len(distinct_n) < 2:
             return {
                 "passed": False,
                 "verdict": "insufficient_samples",
                 "fit_metric": "queries",
-                "failure_reason": "Insufficient valid interactive query samples collected (minimum 2 required)",
+                "failure_reason": "Insufficient valid interactive query samples collected (minimum 2 distinct scales with N > 1 required)",
                 "claimed_complexity": norm_claimed,
                 "fitted_complexity": "unknown",
                 "fitted_alpha": None,
@@ -307,22 +404,27 @@ class EmpiricalRatioAnalyzer:
             }
 
         max_obs_queries = max(int(s["queries"]) for s in valid_samples)
-        if max_queries is not None and max_obs_queries > max_queries:
-            return {
-                "passed": False,
-                "verdict": "query_budget_exceeded",
-                "fit_metric": "queries",
-                "failure_reason": f"Observed max queries ({max_obs_queries}) exceeded protocol.max_queries ({max_queries})",
-                "claimed_complexity": norm_claimed,
-                "fitted_complexity": "over_budget",
-                "fitted_alpha": None,
-                "r_squared": None,
-                "max_observed_queries": max_obs_queries,
-                "max_queries_limit": max_queries,
-                "samples": samples,
-                "growth_ratios": [],
-                "remediation_advice": "Reduce query count or update protocol.max_queries to match the intended algorithm.",
-            }
+        budget_samples = [
+            s for s in valid_samples if s.get("queries_source") != "contestant_messages"
+        ]
+        if max_queries is not None and budget_samples:
+            max_budget_queries = max(int(s["queries"]) for s in budget_samples)
+            if max_budget_queries > max_queries:
+                return {
+                    "passed": False,
+                    "verdict": "query_budget_exceeded",
+                    "fit_metric": "queries",
+                    "failure_reason": f"Observed max queries ({max_budget_queries}) exceeded protocol.max_queries ({max_queries})",
+                    "claimed_complexity": norm_claimed,
+                    "fitted_complexity": "over_budget",
+                    "fitted_alpha": None,
+                    "r_squared": None,
+                    "max_observed_queries": max_budget_queries,
+                    "max_queries_limit": max_queries,
+                    "samples": samples,
+                    "growth_ratios": [],
+                    "remediation_advice": "Reduce query count or update protocol.max_queries to match the intended algorithm.",
+                }
 
         slope_log2, intercept_log2, log2_r2 = cls.fit_query_log_linear(valid_samples)
         q_alpha, q_alpha_r2 = cls.fit_query_power_law(valid_samples)
@@ -342,7 +444,12 @@ class EmpiricalRatioAnalyzer:
                     "from_queries": int(q_from),
                     "to_queries": int(q_to),
                     "observed_ratio": round(q_to / max(q_from, 1.0), 2),
-                    "expected_ratio": round(cls.calculate_expected_ratio(norm_claimed, n_from, n_to), 2),
+                    "expected_ratio": round(
+                        cls.calculate_expected_ratio(
+                            norm_claimed, n_from, n_to, dominant_var=dominant_var
+                        ),
+                        2,
+                    ),
                     "delta_log2_n": round(
                         math.log2(max(2.0, float(n_to))) - math.log2(max(2.0, float(n_from))), 2
                     ),
@@ -368,9 +475,17 @@ class EmpiricalRatioAnalyzer:
         }
 
         if norm_claimed in ("O(log n)", "O(logn)"):
-            # Falsify polynomial query growth (e.g. O(n) disguised as O(log n))
-            if q_alpha > 0.65 and (q_alpha_r2 >= 0.80 or max_obs_queries > 4 * math.log2(max(4, int(valid_samples[-1]["n"]))) + 20):
-                fitted_cat = cls.infer_complexity_category(q_alpha)
+            # Falsify polynomial / sublinear-power query growth (e.g. O(sqrt n) or O(n) disguised as O(log n))
+            max_n_val = max(int(s["n"]) for s in valid_samples)
+            is_super_log = (
+                (q_alpha > 0.65 and q_alpha_r2 >= 0.80)
+                or (q_alpha > 0.35 and q_alpha_r2 >= 0.85 and q_alpha_r2 > log2_r2 and max_n_val >= 64)
+                or (max_n_val >= 64 and max_obs_queries > 4 * math.log2(max_n_val) + 20)
+            )
+            if is_super_log:
+                fitted_cat = (
+                    "O(sqrt n)" if 0.35 < q_alpha < 0.70 else cls.infer_complexity_category(q_alpha)
+                )
                 return {
                     "passed": False,
                     "verdict": "query_ratio_mismatch",
@@ -466,12 +581,15 @@ class EmpiricalRatioAnalyzer:
         claimed_complexity: str,
         samples: list[dict[str, Any]],
         time_limit_ms: float = 2000.0,
+        *,
+        dominant_var: str = "n",
     ) -> dict[str, Any]:
-        norm_claimed = normalize_complexity_expression(claimed_complexity)
+        norm_claimed = normalize_complexity_expression(claimed_complexity, dominant_var=dominant_var)
         valid_samples = [
             s for s in samples
             if s.get("status") == "ok"
             and s.get("cpu_time_ms") is not None
+            and not isinstance(s.get("cpu_time_ms"), bool)
             and math.isfinite(float(s.get("cpu_time_ms", 0.0) or 0.0))
         ]
 
@@ -489,36 +607,40 @@ class EmpiricalRatioAnalyzer:
                 "remediation_advice": "Check if generator and solution execute properly without immediate crash.",
             }
 
-        last_sample = samples[-1]
-        if last_sample.get("status") == "timeout":
-            return {
-                "passed": False,
-                "verdict": "timeout_at_extreme",
-                "failure_reason": f"Execution timed out at extreme test point (N={last_sample.get('n')})",
-                "claimed_complexity": norm_claimed,
-                "fitted_complexity": "timeout",
-                "fitted_alpha": None,
-                "r_squared": None,
-                "samples": samples,
-                "growth_ratios": [],
-                "remediation_advice": f"Algorithm execution timed out on N={last_sample.get('n')}. Optimize time complexity or reduce constant factors.",
-            }
+        failed_payload = cls._check_failed_samples(norm_claimed, samples, fit_metric="cpu_time_ms")
+        if failed_payload is not None:
+            return failed_payload
 
-        if len(valid_samples) < 2:
+        is_exp_claimed = norm_claimed in cls.EXPONENTIAL_BASE_RANGES
+        min_n_required = 1.0 if is_exp_claimed else 1.000001
+        fittable_samples = [
+            s
+            for s in valid_samples
+            if isinstance(s.get("n"), int | float)
+            and not isinstance(s.get("n"), bool)
+            and math.isfinite(float(s["n"]))
+            and float(s["n"]) >= min_n_required
+            and float(s["cpu_time_ms"]) > 0.01
+        ]
+        distinct_n = {float(s["n"]) for s in fittable_samples}
+        if len(fittable_samples) < 2 or len(distinct_n) < 2:
             return {
                 "passed": False,
                 "verdict": "insufficient_samples",
-                "failure_reason": "Insufficient valid execution samples collected (minimum 2 required)",
+                "failure_reason": (
+                    "Insufficient valid execution samples collected "
+                    "(minimum 2 distinct scales with N > 1 and positive timing required)"
+                ),
                 "claimed_complexity": norm_claimed,
                 "fitted_complexity": "unknown",
                 "fitted_alpha": None,
                 "r_squared": None,
                 "samples": samples,
                 "growth_ratios": [],
-                "remediation_advice": "Ensure generator produces inputs and solution executes without early crash.",
+                "remediation_advice": "Ensure generator produces distinct scales (N > 1) and solution executes cleanly.",
             }
 
-        alpha, r_squared = cls.fit_log_linear(valid_samples)
+        alpha, r_squared = cls.fit_log_linear(fittable_samples)
         fitted_cat = cls.infer_complexity_category(alpha)
 
         expected_range = cls.COMPLEXITY_ALPHA_RANGES.get(norm_claimed, (0.65, 1.35))
@@ -526,8 +648,8 @@ class EmpiricalRatioAnalyzer:
         fit_model = "log_linear"
         exponential_fit: dict[str, Any] | None = None
 
-        if norm_claimed in cls.EXPONENTIAL_BASE_RANGES:
-            exp_base, exp_beta, exp_r2 = cls.fit_exponential(valid_samples)
+        if is_exp_claimed:
+            exp_base, exp_beta, exp_r2 = cls.fit_exponential(fittable_samples)
             base_lo, base_hi = cls.EXPONENTIAL_BASE_RANGES[norm_claimed]
             exponential_fit = {
                 "base": round(exp_base, 3),
@@ -535,33 +657,92 @@ class EmpiricalRatioAnalyzer:
                 "r_squared": round(exp_r2, 3),
                 "expected_base_range": [base_lo, base_hi],
             }
+            fit_model = "exponential"
+            r_squared = exp_r2
             if base_lo <= exp_base <= base_hi and exp_r2 >= 0.70:
-                fit_model = "exponential"
                 is_alpha_match = True
                 fitted_cat = norm_claimed
-                r_squared = exp_r2
+            else:
+                is_alpha_match = False
+                if exp_base >= 2.75 and exp_r2 >= 0.70:
+                    fitted_cat = "O(3^n)" if exp_base <= 4.10 else f"O({exp_base:.1f}^n)"
+                elif exp_base >= 1.45 and exp_r2 >= 0.70:
+                    fitted_cat = "O(2^n)"
+                else:
+                    fitted_cat = cls.infer_complexity_category(alpha)
 
-        # 若后段高信噪比测点（后 3 点）呈现显著高阶增长，采用后段拟合结果以防前段底噪平线掩盖真实复杂度
-        if fit_model == "log_linear" and len(valid_samples) >= 4:
-            tail_samples = valid_samples[-3:]
+        # 若后段高信噪比测点（后 3 点）在有效规模跨度（>=2x）上呈现显著高阶增长，采用后段拟合结果以防前段底噪平线掩盖真实复杂度
+        if fit_model == "log_linear" and len(fittable_samples) >= 4:
+            tail_samples = fittable_samples[-3:]
+            tail_n0 = int(tail_samples[0].get("n", 0))
+            tail_n1 = int(tail_samples[-1].get("n", 0))
+            tail_n_span = (float(tail_n1) / float(tail_n0)) if tail_n0 > 0 else 1.0
+            tail_times = [float(s["cpu_time_ms"]) for s in tail_samples]
+            tail_time_ratio = max(tail_times) / max(min(tail_times), 0.1)
             tail_alpha, tail_r2 = cls.fit_log_linear(tail_samples)
-            if tail_alpha > expected_range[1]:
+            if tail_alpha > expected_range[1] and (
+                norm_claimed in ("O(2^n)", "O(n!)")
+                or (tail_n_span >= 2.0 and tail_time_ratio >= 2.0 and tail_r2 >= 0.75)
+            ):
                 is_alpha_match = False
                 alpha = tail_alpha
                 fitted_cat = cls.infer_complexity_category(tail_alpha)
                 r_squared = tail_r2
+            elif tail_n_span >= 2.0:
+                # 若前段呈平坦进程启动平台（如 Windows CreateProcess ~12ms 固定开销），
+                # 扣除平台底噪后再检查后段净增量斜率，避免低常数 O(n^2) 被启动平台拉平掩盖。
+                t0 = float(fittable_samples[0]["cpu_time_ms"])
+                t1 = float(fittable_samples[1]["cpu_time_ms"])
+                plateau = min(t0, t1)
+                t_last = float(fittable_samples[-1]["cpu_time_ms"])
+                is_flat_head = (
+                    abs(t1 - t0) <= 2.0
+                    and (plateau <= 5.0 or (max(t0, t1) / max(plateau, 0.1)) <= 1.25)
+                    and (t_last - plateau) >= 15.0
+                )
+                if is_flat_head:
+                    offset = max(0.0, plateau - 0.1)
+                    adjusted_tail = [
+                        {
+                            "n": s["n"],
+                            "cpu_time_ms": float(s["cpu_time_ms"]) - offset,
+                        }
+                        for s in fittable_samples[-3:]
+                        if (float(s["cpu_time_ms"]) - offset) >= 1.5
+                    ]
+                    if len(adjusted_tail) >= 2:
+                        net_alpha, net_r2 = cls.fit_log_linear(adjusted_tail)
+                        n_prev = int(adjusted_tail[-2]["n"])
+                        n_last = int(adjusted_tail[-1]["n"])
+                        t_prev_net = float(adjusted_tail[-2]["cpu_time_ms"])
+                        t_last_net = float(adjusted_tail[-1]["cpu_time_ms"])
+                        obs_net_ratio = t_last_net / max(t_prev_net, 0.01)
+                        exp_last_ratio = cls.calculate_expected_ratio(
+                            norm_claimed, n_prev, n_last, dominant_var=dominant_var
+                        )
+                        if (
+                            net_alpha > expected_range[1]
+                            and net_r2 >= 0.90
+                            and obs_net_ratio >= max(2.0, exp_last_ratio * 1.5)
+                        ):
+                            is_alpha_match = False
+                            alpha = net_alpha
+                            fitted_cat = cls.infer_complexity_category(net_alpha)
+                            r_squared = net_r2
 
         growth_ratios: list[dict[str, Any]] = []
-        for i in range(len(valid_samples) - 1):
-            s_from = valid_samples[i]
-            s_to = valid_samples[i + 1]
+        for i in range(len(fittable_samples) - 1):
+            s_from = fittable_samples[i]
+            s_to = fittable_samples[i + 1]
             n_from = int(s_from["n"])
             n_to = int(s_to["n"])
             t_from = float(s_from["cpu_time_ms"])
             t_to = float(s_to["cpu_time_ms"])
 
             observed_ratio = (t_to / t_from) if t_from > 0.01 else 1.0
-            expected_ratio = cls.calculate_expected_ratio(norm_claimed, n_from, n_to)
+            expected_ratio = cls.calculate_expected_ratio(
+                norm_claimed, n_from, n_to, dominant_var=dominant_var
+            )
 
             growth_ratios.append(
                 {
@@ -573,12 +754,14 @@ class EmpiricalRatioAnalyzer:
                 }
             )
 
-        max_sample = valid_samples[-1]
+        max_sample = fittable_samples[-1]
         max_time = float(max_sample["cpu_time_ms"])
-        all_times = [float(s["cpu_time_ms"]) for s in valid_samples]
+        all_times = [float(s["cpu_time_ms"]) for s in fittable_samples]
         peak_time = max(all_times)
         min_time = min(all_times)
         max_n = int(max_sample.get("n", 0))
+        min_n = int(fittable_samples[0].get("n", 0))
+        n_span = (float(max_n) / float(min_n)) if min_n > 0 else 1.0
         headroom_ratio = max_time / time_limit_ms if time_limit_ms > 0 else 1.0
         peak_headroom = peak_time / time_limit_ms if time_limit_ms > 0 else 1.0
 
@@ -587,16 +770,50 @@ class EmpiricalRatioAnalyzer:
             extra_meta["exponential_fit"] = exponential_fit
 
         if not is_alpha_match:
-            # 当全部样本耗时均处于 OS 计时底噪区间（<=15ms 且峰值 <5% TL），
+            # 当全部样本耗时均处于 OS 计时底噪区间（<=15ms，或低信噪比 <=35ms 且峰值 <5% TL），
             # 仅在不存在干净的高信噪比超阶增长信号（R^2>=0.90 且首尾缩放 >=4x 且最大点 >=2ms）时
-            # 才按底噪豁免，既避免 O(1)/O(log n) 亚毫秒抖动误报，又不放过干净的 O(n^2)/O(n^3) 曲线。
-            has_clean_high_order_signal = (
-                alpha > expected_range[1]
-                and r_squared >= 0.90
-                and (max_time / max(min_time, 0.1)) >= 4.0
-                and max_time >= 2.0
+            # 才按底噪豁免，既避免 O(1)/O(log n)/O(n log n) 计时粒度抖动误报，又不放过干净的 O(n^2)/O(n^3)/O(3^n) 曲线。
+            if fit_model == "exponential" and exponential_fit is not None:
+                exp_hi = exponential_fit["expected_base_range"][1]
+                has_clean_high_order_signal = (
+                    exponential_fit["base"] > exp_hi
+                    and r_squared >= 0.90
+                    and (max_time / max(min_time, 0.1)) >= 4.0
+                    and max_time >= 2.0
+                )
+            else:
+                has_clean_high_order_signal = (
+                    alpha > expected_range[1]
+                    and r_squared >= 0.90
+                    and (max_time / max(min_time, 0.1)) >= 4.0
+                    and max_time >= 2.0
+                )
+            in_noise_floor = (
+                peak_time <= 15.0
+                or (peak_time <= 35.0 and r_squared < 0.5)
+                or (
+                    peak_time <= 80.0
+                    and (peak_time / max(min_time, 0.1)) < 2.2
+                )
             )
-            if peak_time <= 15.0 and peak_headroom < 0.05 and not has_clean_high_order_signal:
+            warmup_decay_only = (
+                fit_model == "log_linear"
+                and alpha < expected_range[0]
+                and peak_headroom < 0.15
+            )
+            narrow_scale_noise = (
+                fit_model == "log_linear"
+                and not is_exp_claimed
+                and norm_claimed != "O(n!)"
+                and n_span < 2.0
+                and peak_headroom < 0.25
+                and (peak_time / max(min_time, 0.1)) < 3.0
+            )
+            if (
+                (in_noise_floor and peak_headroom < 0.05)
+                or warmup_decay_only
+                or narrow_scale_noise
+            ) and not has_clean_high_order_signal:
                 return {
                     "passed": True,
                     "verdict": "verified_within_noise_floor",
@@ -609,14 +826,20 @@ class EmpiricalRatioAnalyzer:
                     "max_scale_headroom_ratio": round(headroom_ratio, 3),
                     "noise_floor_note": (
                         f"All scale samples completed within OS timer noise floor "
-                        f"(peak={peak_time:.2f}ms <= 15ms, headroom={peak_headroom:.3f})."
+                        f"(peak={peak_time:.2f}ms, r2={r_squared:.3f}, headroom={peak_headroom:.3f})."
                     ),
                     **extra_meta,
                 }
 
             # 仅在规模足够大（跨越硬件缓存）且耗时余量充足时允许缓存跳跃容差
-            if alpha > expected_range[1] and len(valid_samples) >= 3 and headroom_ratio < 0.40 and max_n >= 50000:
-                sub_samples = valid_samples[:-1]
+            if (
+                fit_model == "log_linear"
+                and alpha > expected_range[1]
+                and len(fittable_samples) >= 3
+                and headroom_ratio < 0.40
+                and max_n >= 50000
+            ):
+                sub_samples = fittable_samples[:-1]
                 sub_alpha, sub_r2 = cls.fit_log_linear(sub_samples)
                 if expected_range[0] <= sub_alpha <= expected_range[1]:
                     return {
@@ -633,10 +856,21 @@ class EmpiricalRatioAnalyzer:
                         **extra_meta,
                     }
 
+            if fit_model == "exponential" and exponential_fit is not None:
+                failure_reason = (
+                    f"Measured exponential base={exponential_fit['base']:.2f} "
+                    f"(R^2={exponential_fit['r_squared']:.2f}, fitted as {fitted_cat}) "
+                    f"outside claimed {norm_claimed} base range {exponential_fit['expected_base_range']}"
+                )
+            else:
+                failure_reason = (
+                    f"Measured complexity exponent alpha={alpha:.2f} (fitted as {fitted_cat}) "
+                    f"outside claimed {norm_claimed} range [{expected_range[0]}, {expected_range[1]}]"
+                )
             return {
                 "passed": False,
                 "verdict": "ratio_mismatch",
-                "failure_reason": f"Measured complexity exponent alpha={alpha:.2f} (fitted as {fitted_cat}) outside claimed {norm_claimed} range [{expected_range[0]}, {expected_range[1]}]",
+                "failure_reason": failure_reason,
                 "claimed_complexity": norm_claimed,
                 "fitted_complexity": fitted_cat,
                 "fitted_alpha": round(alpha, 2),
@@ -650,6 +884,31 @@ class EmpiricalRatioAnalyzer:
                     "for multi-parameter or exponential problems."
                 ),
                 **extra_meta,
+            }
+
+        # 当声称为 O(n) / O(n log n) 等线性对数阶，但全部采样点均落在低信噪比 OS 计时底噪内，
+        # fitted_cat 可能因常数启动底噪退化为 O(1)；回退报告 claimed_complexity 避免污染难度评估。
+        if (
+            norm_claimed in ("O(n)", "O(n log n)", "O(nlogn)", "O(n sqrt n)", "O(nsqrtn)")
+            and alpha < 0.50
+            and r_squared < 0.70
+            and peak_time <= 35.0
+            and peak_headroom < 0.05
+        ):
+            return {
+                "passed": True,
+                "verdict": "verified_within_noise_floor",
+                "claimed_complexity": norm_claimed,
+                "fitted_complexity": norm_claimed,
+                "fitted_alpha": round(alpha, 2),
+                "r_squared": round(r_squared, 3),
+                "samples": samples,
+                "growth_ratios": growth_ratios,
+                "max_scale_headroom_ratio": round(headroom_ratio, 3),
+                "noise_floor_note": (
+                    f"Low-SNR timer floor masked growth exponent (peak={peak_time:.2f}ms, r2={r_squared:.3f}); "
+                    f"preserving claimed complexity {norm_claimed}."
+                ),
             }
 
         return {

@@ -11,6 +11,17 @@ from .base import Tool, ToolResult, input_schema_from_model
 from .schemas import FileReadInput, FileSaveInput
 
 
+def _is_within_dir(target: str, root: str) -> bool:
+    """判断 target 是否位于 root 目录内（兼容 Windows/macOS 大小写不敏感路径）。"""
+    try:
+        return (
+            os.path.commonpath([os.path.normcase(target), os.path.normcase(root)])
+            == os.path.normcase(root)
+        )
+    except ValueError:
+        return False
+
+
 def canonical_problem_path(path: str, problem_dir: str | None = None) -> str:
     normalized = path.replace("\\", "/")
     if "/" in normalized:
@@ -66,7 +77,7 @@ class FileReadTool(Tool):
         # 如果指定了 problem_dir，确保文件在该目录内
         if problem_dir:
             problem_dir = os.path.realpath(os.path.abspath(problem_dir))
-            if not full_path.startswith(problem_dir + os.sep) and full_path != problem_dir:
+            if not _is_within_dir(full_path, problem_dir):
                 return ToolResult.fail("Access denied: path outside problem directory")
 
         if not os.path.exists(full_path):
@@ -197,16 +208,33 @@ class FileSaveTool(Tool):
         # 如果指定了 problem_dir，确保文件在该目录内
         if problem_dir:
             problem_dir = os.path.realpath(os.path.abspath(problem_dir))
-            if not full_path.startswith(problem_dir + os.sep) and full_path != problem_dir:
+            if not _is_within_dir(full_path, problem_dir):
                 return ToolResult.fail("Access denied: path outside problem directory")
 
         # 确保目录存在
         if dir_path:
             os.makedirs(dir_path, exist_ok=True)
 
+        tmp_path: str | None = None
         try:
-            with open(full_path, "w", encoding="utf-8", newline="\n") as f:
-                f.write(content)
+            import tempfile
+
+            # Atomic temp-file + os.replace write: breaks hardlinks (preventing export edits
+            # from silently mutating shared inodes in tests/) and avoids partial writes.
+            target_dir = dir_path or "."
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                newline="\n",
+                dir=target_dir,
+                prefix=".autocode_save_",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp_f:
+                tmp_path = tmp_f.name
+                tmp_f.write(content)
+            os.replace(tmp_path, full_path)
+            tmp_path = None
 
             return ToolResult.ok(
                 path=full_path,
@@ -214,4 +242,9 @@ class FileSaveTool(Tool):
                 message=f"Saved {len(content)} bytes to {path}",
             )
         except Exception as e:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
             return ToolResult.fail(f"Failed to save file: {str(e)}")

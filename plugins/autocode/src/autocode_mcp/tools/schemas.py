@@ -9,11 +9,16 @@ All 19 tools are migrated (tasks 7.2 / 7.3 pilot + 7.4 remainder).
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..workflow.models import OracleMode, ProblemType, ProtocolMode
+
+GeneratorTypeStr = Annotated[
+    str,
+    Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$"),
+]
 
 # --------------------------------------------------------------------------- #
 # Pilot tools (7.2 / 7.3)
@@ -26,6 +31,8 @@ class ProblemAuditInput(BaseModel):
     include_difficulty: bool = True
     report_path: str | None = None
     standalone: bool = False
+    layout: Literal["auto", "autocode", "standard_cn", "polygon", "hydro"] = "auto"
+    enable_mutation_testing: bool | None = None
 
 
 class FileReadInput(BaseModel):
@@ -52,6 +59,10 @@ class ProblemValidateInput(BaseModel):
     problem_dir: str
     validate_types: list[Literal["statement_samples", "sample_files", "all"]] = ["all"]
     statement_samples: list[StatementSample] | None = None
+    samples_dir: str | None = Field(
+        default=None,
+        description="Optional directory containing sample .in/.ans files (defaults to tests/samples if present, else tests/).",
+    )
     tolerance: float = 1e-9
     timeout: int = 30
 
@@ -66,6 +77,7 @@ class CheckerScenario(BaseModel):
     contestant_output: str
     reference_output: str
     expected_verdict: Literal["AC", "WA", "PE", "PC", "FAIL"] = "AC"
+    category: str | None = None
 
 
 class CheckerBuildInput(BaseModel):
@@ -105,6 +117,7 @@ class InteractionScenario(BaseModel):
     contestant_output: str
     expected_verdict: Literal["AC", "WA", "PE", "PC", "FAIL", "TLE"] = "AC"
     stage: int | None = Field(default=None, ge=1)
+    category: str | None = None
 
 
 class InteractorBuildInput(BaseModel):
@@ -224,7 +237,7 @@ class SolutionAnalyzeInput(BaseModel):
 
 class SolutionBuildInput(BaseModel):
     problem_dir: str
-    solution_type: Literal["sol", "brute"]
+    solution_type: Literal["sol", "brute", "wrong", "reference"]
     name: str | None = None
     code: str | None = None
     source_path: str | None = None
@@ -232,11 +245,15 @@ class SolutionBuildInput(BaseModel):
         default=None,
         description="C++ compiler command/path; defaults to manifest.compiler or 'g++'",
     )
+    enable_sanitizers: bool = Field(
+        default=False,
+        description="Build with AddressSanitizer/UBSan (auto-probes runtime and static fallback on Linux)",
+    )
 
 
 class SolutionRunInput(BaseModel):
     problem_dir: str
-    solution_type: Literal["sol", "brute"]
+    solution_type: Literal["sol", "brute", "wrong", "reference"]
     input_data: str
     name: str | None = None
     timeout: int = 30
@@ -252,6 +269,7 @@ class ProblemVerifyTestsInput(BaseModel):
     tests_dir: str | None = None
     verify_types: list[
         Literal[
+            "all",
             "file_count",
             "answer_consistency",
             "validator",
@@ -262,6 +280,7 @@ class ProblemVerifyTestsInput(BaseModel):
             "duplicate_inputs",
             "scale_distribution",
             "purpose_coverage",
+            "boundary_coverage",
             "validator_self_test",
             "checker_self_test",
             "interactor_self_test",
@@ -302,7 +321,7 @@ class StressGeneratorArgs(BaseModel):
 class StressProfile(BaseModel):
     name: str | None = None
     trials: int | None = None
-    types: list[Literal["1", "2", "3", "4"]] | None = None
+    types: list[GeneratorTypeStr] | None = None
     generator_args: dict | None = None
 
 
@@ -313,10 +332,14 @@ class StressTestRunInput(BaseModel):
     timeout: int = 30
     sol_name: str | None = None
     brute_name: str | None = None
-    types: list[Literal["1", "2", "3", "4"]] | None = None
+    types: list[GeneratorTypeStr] | None = None
     generator_args: StressGeneratorArgs | None = None
     stress_profiles: list[StressProfile] | None = None
     concurrency_limit: int = 4
+    enable_sanitizers: bool = Field(
+        default=False,
+        description="Compile instrumented binaries into .autocode/san_bin/ with ASan/UBSan and run stress rounds under sanitizers",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -352,6 +375,34 @@ class ProblemCreateInput(BaseModel):
     problem_type: ProblemType | None = None
     protocol_mode: ProtocolMode | None = None
     oracle_mode: OracleMode = "brute"
+    time_limit_ms: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional initial time limit in milliseconds (e.g. 1000 or 2000); defaults to 2000",
+    )
+    memory_limit_mb: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional initial memory limit in MB (e.g. 256 or 512); defaults to 256",
+    )
+    overwrite: bool = Field(
+        default=False,
+        description="Set true to explicitly overwrite an existing .autocode/manifest.json",
+    )
+
+    @field_validator("time_limit_ms", "memory_limit_mb", mode="before")
+    @classmethod
+    def _reject_bool_limits(cls, v: Any) -> Any:
+        if isinstance(v, bool):
+            raise ValueError("limit must be a positive integer, not boolean")
+        return v
+
+    @field_validator("overwrite", mode="before")
+    @classmethod
+    def _require_strict_bool_overwrite(cls, v: Any) -> Any:
+        if not isinstance(v, bool):
+            raise ValueError("overwrite must be a boolean")
+        return v
 
 
 class GenerateConstraints(BaseModel):
@@ -362,7 +413,10 @@ class GenerateConstraints(BaseModel):
 
 class GenerateTestConfig(BaseModel):
     seed_offset: int = 0
-    type: Literal["1", "2", "3", "4"]
+    type: str = Field(
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$",
+        description="Generator strategy type (standard '1'..'4' or custom hack types like '5', '6', 'hack')",
+    )
     n_min: int
     n_max: int
     t_min: int
@@ -384,6 +438,14 @@ class ProblemGenerateTestsInput(BaseModel):
     oversample_ratio: float = 1.5
     answer_ext: str = ".ans"
     resume: bool = False
+    mode: Literal["replace", "append", "register_existing"] = Field(
+        default="replace",
+        description=(
+            "'replace' (default, preserves locked/tests/hack cases), "
+            "'append' (keeps existing tests/ and appends new cases), or "
+            "'register_existing' (indexes existing tests/ without deleting or regenerating)."
+        ),
+    )
     hard_timeout_seconds: int | None = None
     checkpoint_every: int = 10
     concurrency_limit: int = 4
@@ -396,13 +458,30 @@ class ProblemCleanupProcessesInput(BaseModel):
 
 class ProblemPackPolygonInput(BaseModel):
     problem_dir: str
-    time_limit: int | None = Field(default=None, ge=1)
-    memory_limit: int | None = Field(default=None, ge=1)
+    time_limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Time limit in SECONDS (e.g., 1 or 2). Do NOT pass milliseconds; use time_limit_ms instead.",
+    )
+    time_limit_ms: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional time limit in MILLISECONDS (e.g., 1000 or 2000). Overrides manifest.time_limit_ms.",
+    )
+    allow_time_limit_override: bool = Field(
+        default=False,
+        description="Set true to explicitly allow time_limit > 60s or >10x deviation from manifest.time_limit_ms.",
+    )
+    memory_limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Memory limit in MB (e.g., 256 or 512).",
+    )
     export_formats: list[Literal["polygon", "hydro", "qoj"]] = ["polygon"]
     export_data_mode: Literal["copy", "hardlink", "zip"] = Field(
         default="hardlink",
         description=(
-            "How Hydro/QOJ exporters stage test data files: "
+            "How Polygon/Hydro/QOJ exporters stage test data files: "
             "'hardlink' (default, avoids 3x disk duplication with automatic copy fallback), "
             "'copy' (independent physical copies), or 'zip' (compressed archive under exports/<fmt>.zip)."
         ),

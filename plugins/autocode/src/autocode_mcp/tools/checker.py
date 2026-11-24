@@ -6,6 +6,7 @@ Checker 工具组 - 输出检查器。
 
 from __future__ import annotations
 
+import json
 import os
 
 from pydantic import ValidationError
@@ -32,7 +33,7 @@ class CheckerBuildTool(Tool, BuildToolMixin):
 
         基于论文 Algorithm 3 实现:
         1. 保存代码到 problem_dir/files/checker.cpp
-        2. 编译生成 files/checker.exe
+        2. 编译生成 files/checker（Windows 下为 files/checker.exe）
         3. 运行测试场景验证准确性
         4. 返回准确率和详细结果
 
@@ -57,7 +58,10 @@ class CheckerBuildTool(Tool, BuildToolMixin):
             manifest = load_manifest(problem_dir)
         except (ValidationError, OSError, ValueError) as exc:
             return ToolResult.fail(f"invalid or unreadable manifest.json: {exc}")
-        effective_compiler = resolve_effective_compiler(compiler, manifest)
+        try:
+            effective_compiler = resolve_effective_compiler(compiler, manifest)
+        except ValueError as exc:
+            return ToolResult.fail(f"invalid compiler: {exc}")
 
         resolved, err = resolve_source(
             problem_dir,
@@ -166,6 +170,13 @@ class CheckerBuildTool(Tool, BuildToolMixin):
 
         total = len(test_scenarios)
         accuracy = correct_count / total if total > 0 else 0
+
+        if test_scenarios:
+            autocode_dir = os.path.join(problem_dir, ".autocode")
+            os.makedirs(autocode_dir, exist_ok=True)
+            scenarios_path = os.path.join(autocode_dir, "checker_scenarios.json")
+            with open(scenarios_path, "w", encoding="utf-8", newline="\n") as sf:
+                json.dump(test_scenarios, sf, ensure_ascii=False, indent=2)
 
         return ToolResult.ok(
             source_path=compile_source,

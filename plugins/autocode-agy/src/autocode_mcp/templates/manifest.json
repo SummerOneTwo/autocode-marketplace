@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.0",
+  "problem_name": "Example Problem",
+  "problem_type": "standard",
+  "oracle_mode": "brute",
+  "protocol": null,
+  "interactive": false,
+  "special_judge": false,
+  "stress_comparison": "exact",
+  "stress_checker_bidirectional": false,
+  "time_limit_ms": 2000,
+  "memory_limit_mb": 256,
+  "compiler": null,
+  "statement_path": "statements/README.md",
+  "tutorial_path": "statements/tutorial.md",
+  "constraints": {
+    "n_max": 200000
+  },
+  "empirical_complexity": null,
+  "quality_gates": {
+    "require_stress_passed": true,
+    "require_validation_passed": true,
+    "require_tests_verified": true,
+    "require_limit_semantics": true,
+    "require_wrong_solution_kill": false,
+    "require_validator_check": true,
+    "min_limit_case_ratio": 0.5,
+    "wrong_tle_kill_factor": 1.0,
+    "wrong_slowdown_kill_ratio": null
+  },
+  "audit_gates": {
+    "require_full_audit": false,
+    "require_statement_consistency": true,
+    "require_validator_self_test": false,
+    "require_checker_self_test": true,
+    "require_interactor_self_test": true,
+    "max_duplicate_input_ratio": 0.2,
+    "min_difficulty_confidence": 0.5
+  },
+  "difficulty": {
+    "rating": null,
+    "band": null,
+    "confidence": null,
+    "algorithm_tags": [],
+    "reasons": [],
+    "notes": []
+  },
+  "solutions": [
+    {
+      "name": "sol",
+      "role": "main",
+      "language": "cpp",
+      "path": "solutions/sol.cpp"
+    },
+    {
+      "name": "brute",
+      "role": "brute",
+      "language": "cpp",
+      "path": "solutions/brute.cpp"
+    }
+  ],
+  "subtasks": [],
+  "case_plan": [
+    {
+      "name": "tiny-1",
+      "type": "1",
+      "seed": 1,
+      "group": "sanity",
+      "purpose": "basic correctness"
+    },
+    {
+      "name": "random-1",
+      "type": "2",
+      "seed": 2,
+      "group": "coverage",
+      "purpose": "random coverage"
+    },
+    {
+      "name": "extreme-1",
+      "type": "3",
+      "seed": 3,
+      "group": "limit",
+      "purpose": "edge constraints"
+    },
+    {
+      "name": "tle-1",
+      "type": "4",
+      "seed": 4,
+      "group": "limit",
+      "purpose": "performance pressure"
+    }
+  ]
+}

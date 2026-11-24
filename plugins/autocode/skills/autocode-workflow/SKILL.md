@@ -99,7 +99,7 @@ Use these agents when the risk is material:
 
 Creates:
 
-- `manifest.json`
+- `manifest.json` (accepts optional `time_limit_ms` / `memory_limit_mb`; refuses to overwrite an existing `.autocode/manifest.json` unless `overwrite=true`)
 - `solutions/`
 - `files/`
 - `statements/README.md`
@@ -139,8 +139,8 @@ Before writing brute, perform a quick counterexample check on paper:
 Use:
 
 - `solution_analyze` to estimate time/space complexity, risk notes, and recommended stress profiles.
-- `solution_audit_std` to check std complexity and constraint mismatch.
-- `solution_audit_brute` to check whether brute can support stress testing.
+- `solution_audit_std` to check std complexity and constraint mismatch (both tools share `static_estimated_complexity` and emit explicit `complexity_conflict` warnings when claimed/static/empirical estimates disagree).
+- `solution_audit_brute` to check whether brute can support stress testing (runs a small-scale stepped probe with `RLIMIT_CORE=0` when binaries exist, hard-failing on crashes/OOM and auto-clamping `recommended_stress_params.n_max` on timeout).
 
 Do not accept a claimed complexity without evidence.
 
@@ -200,15 +200,19 @@ Use multiple profiles when possible:
 
 Use `stress_test_run` advisory fields (`complexity_context`, `n_max_advisory`) to choose `n_max` based on audit evidence instead of fixed thresholds.
 
+Pass `enable_sanitizers=true` to run an isolated ASan/UBSan stress pass (compiled into `.autocode/san_bin/` without overwriting production `-O2` binaries; Linux preloaded containers automatically fall back to `-static-libasan -static-libubsan` and verify a negative-control probe before running).
+
 Proceed only when `completed_rounds == total_rounds`.
 
 ### `problem_validate`
 
-Validation failure is a release blocker. Do not generate final tests or package until statement samples and sample files pass.
+Validation failure is a release blocker. Do not generate final tests or package until statement samples and sample files pass. Oversized sample previews are automatically truncated in the MCP response and spilled to `.autocode/logs/`.
 
 ### `problem_generate_tests`
 
-Final tests should include at least half limit-oriented cases (`type=3` + `type=4`) when candidates are available.
+Final tests should include at least half limit-oriented cases (`type=3` + `type=4` or `group="limit"`) when candidates are available.
+
+Use `mode="replace"` (default, automatically preserving `locked: true` entries and `tests/hack/*.in`), `mode="append"` (append new tests after existing indices without overwriting), or `mode="register_existing"` (index hand-crafted tests in `tests/` without regenerating). Custom generator types (such as `"5"`, `"6"`, `"hack"`) are supported in both `case_plan.type` and `test_configs[*].type`.
 
 For `type=4` profiles with `extra_args` (for example `mode=tle_dense`), the runner may fallback to a no-extra-args retry when the generator rejects those args, to preserve compatibility with older generators.
 
@@ -220,30 +224,27 @@ For long-running generation:
 
 ### `problem_verify_tests`
 
-Must pass before packaging. Default checks include:
-
-- `file_count`
-- `answer_consistency`
-- `validator`
-- `no_empty`
-- `limit_ratio`
-- `limit_semantics`
+Must pass before packaging. When `verify_types` is omitted on a managed workspace, AutoCode runs all checks required by `manifest.json` (plus `duplicate_inputs`, `scale_distribution`, `purpose_coverage`, and `wrong_solution_kill` when wrong solutions exist); pass `verify_types=["all"]` to include `boundary_coverage` and applicable self-tests. Re-running a subset merges signals by key when the dataset/source fingerprint is unchanged instead of erasing prior passed signals.
 
 With `special_judge: true` and `stress_comparison: "checker"` (and a built `files/checker`), `answer_consistency` and `wrong_solution_kill` use the testlib checker against jury answers; with `stress_comparison: "exact"` they still compare strings to the answer files.
 
-Use `wrong_solution_kill` when wrong solutions are available. Wrong entries honor manifest `expected`: default `fail` means at least one test must reject the binary; `pass` means all tests must accept it (checker AC or exact match to `.ans`). The report includes per-test timing breakdowns, `wrong_ms / std_ms` ratios, configurable TLE policies (`quality_gates.wrong_tle_kill_factor`, default `1.0`, and optional `wrong_slowdown_kill_ratio`), and `host_performance_bias` warnings in `problem_audit` when a fast local CPU may mask TLE on typical OJ hardware.
+`wrong_solution_kill` auto-discovers and auto-compiles missing or stale `solutions/wrong_*.cpp` files with the same compiler and resource limits as `sol.cpp`. When `quality_gates.require_wrong_solution_kill=true` and zero wrong solutions are configured or present, it fails closed (`passed=false`) instead of returning a false pass. `duplicate_inputs` enforces zero tolerance on exact byte-identical duplicates (`exact_duplicates > 0` fails immediately). Wrong entries honor manifest `expected`: default `fail` means at least one test must reject the binary; `pass` means all tests must accept it (checker AC or exact match to `.ans`). The report includes per-test timing breakdowns, `wrong_ms / std_ms` ratios, `max_memory_mb`, configurable TLE policies (`quality_gates.wrong_tle_kill_factor`, default `1.0`, and optional `wrong_slowdown_kill_ratio`), and `host_performance_bias` warnings in `problem_audit` when a fast local CPU may mask TLE on typical OJ hardware.
 
-Run `autocode-verify <problem_dir>` for quick manifest/path checks; under the checker workflow it also surfaces `spj_warnings` if `checker.cpp` or the compiled checker is missing.
+**Near-AC Single-Point Mutation Red-Teaming (Recommended)**: beyond standard naive/wrong solutions, construct 2–3 near-AC single-point mutations of `sol.cpp` (e.g. off-by-one boundary, missing tie-breaker, 32-bit overflow, dropped edge-case branch) as `solutions/wrong_*.cpp` and verify `wrong_solution_kill` rejects every one; you can also enable automated single-point mutation testing via `audit_gates.enable_mutation_testing=true` or `autocode-audit --mutation-check`, and strengthen tests via `mode="append"` or `tests/hack/` if any mutation passes all tests.
+
+Run `autocode-verify <problem_dir> --status` (or `--strict-gates` / `--reconcile` after cross-platform moves) for unified manifest, binary freshness, and MCP gate status.
 
 ### `problem_pack_polygon`
 
 Only package after `problem_verify_tests(passed=true)` (and `problem_audit(mode="full")` when `audit_gates.require_full_audit=true`).
 
+Prefer `time_limit_ms` (milliseconds, matching `manifest.json`). Passing large values (`> 60`) or values deviating by >10x from `manifest.time_limit_ms` via deprecated `time_limit` (seconds) is rejected by default unless `allow_time_limit_override=true`. After exporting, AutoCode automatically reads back Polygon `problem.xml` (verifying every `path=` reference and test file inside self-contained `exports/polygon/` or `exports/polygon.zip`), Hydro `problem.yaml` + `testdata/config.yaml`, and QOJ `problem.conf` to verify TL, ML, and file integrity.
+
 Pass `export_formats` to export one or more judge formats in a single call (default `["polygon"]`), and optional `export_data_mode` (`"hardlink"` default to avoid 3x workspace disk duplication with automatic copy fallback, `"copy"`, or `"zip"` for compressed uploadable archives under `exports/<fmt>.zip`):
 
-- `polygon`: standard Polygon layout + `problem.xml` (including `<groups>`/`<dependencies>`/`<tests>` when `subtasks` are defined, and `<communication>` for communication problems).
-- `hydro`: exports under `exports/hydro/` (or `exports/hydro.zip` in `zip` mode): `problem.yaml`, `problem_zh.md`, `testdata/config.yaml` with subtasks and judge sources; interactive exports omit empty `.ans` files and validate `type: interactive` & `interactor`.
-- `qoj`: exports under `exports/qoj/` (or `exports/qoj.zip` in `zip` mode): `problem.conf`, `statement.md`, 1-based contiguous `data/1.in..N.in`, `two_stage`/`with_implementer`/`interaction_mode`, and subtask dependencies; interactive exports omit empty `.ans` files and validate `use_builtin_judger on` & `interaction_mode on`.
+- `polygon`: writes workspace `problem.xml` plus a self-contained `exports/polygon/` directory (or `exports/polygon.zip` in `zip` mode) with all referenced statements, sources, resources, and test files (including `<groups>`/`<dependencies>`/`<tests>` when `subtasks` are defined, and `<communication>` for communication problems).
+- `hydro`: exports under `exports/hydro/` (or `exports/hydro.zip` in `zip` mode): `problem.yaml` (without internal tool tags), `problem_zh.md`, `testdata/config.yaml` with subtasks and judge sources; interactive exports omit empty/placeholder `.ans` files and validate `type: interactive` & `interactor`.
+- `qoj`: exports under `exports/qoj/` (or `exports/qoj.zip` in `zip` mode): `problem.conf`, `statement.md`, 1-based contiguous `data/1.in..N.in`, `two_stage`/`with_implementer`/`interaction_mode`, and subtask dependencies; interactive exports omit empty/placeholder `.ans` files and validate `use_builtin_judger on` & `interaction_mode on`.
 
 ## Manifest
 
@@ -261,7 +262,7 @@ Each problem should maintain `manifest.json` as a readable contract. It should d
 - case plan;
 - optional SPJ fields: `special_judge`, `stress_comparison` (`exact` | `checker`), and optional `stress_checker_bidirectional` (only meaningful with `special_judge` + `stress_comparison=checker`).
 
-Use `autocode-verify <problem_dir>` for quick structural checks, and `autocode-audit <problem_dir> --standalone` (or `problem_audit(standalone=True)`) to audit external non-AutoCode packages read-only.
+Use `autocode-verify <problem_dir>` for quick structural checks, and `autocode-audit <problem_dir> --standalone --layout <auto|autocode|standard_cn|polygon|hydro>` (or `problem_audit(standalone=True)`) to audit external non-AutoCode packages read-only with isolated temporary compilation.
 
 ## Forbidden Actions
 
