@@ -11,10 +11,10 @@
     "agents": "ddf5d2cb28bc3b38eadb2435175de7ac52f1acb099f95a0c1daf4a1ff22a6641",
     "skills": "d91243a65bc12e5b29cc4d7d7b5368e70dd1dcfcec9abb4785ce2b04a56b2a5f",
     "scripts": "756850f0d9e60165d91d29614131c07985d022f1fde80fdbd5eaa47ab2e7feac",
-    "src": "f8011a135dcbb811ea3d1370fe1e8ebe94508dba70f3a428901dcfba2a377694",
+    "src": "ed4abd88da6d06ae4d56ecb09505a73dec495e151ed0acc66701c1d64533d9a0",
     "pyproject.toml": "be5ba00e12182211db8d8b631f8753e71e9d602300fcbc55e893f9fbcb000b2d",
     "uv.lock": "ff08d7ec66304041a6b72ab81ef3cfb3c3a984101f12148f77e6f34aa56b252c",
-    "README.md": "1d42ac4af02e2229db8e3b3fecbca4db4fa4be077a8ae42fa0675e87556e91e6",
+    "README.md": "054a8e0fc0cdda18723afe7ca0ffaf721f57aa2c0b3ac216a142a2dcf571d772",
     "TROUBLESHOOTING.md": "e6ba0d18056103d02b5ece6155231e20782d3b7578f68ff65a706098d203a7a0",
     "CHANGELOG.md": "6ae873b771ad39e7e34b761e12fbbd2734fad3486c13500dc7018bbb265f694c",
     "LICENSE": "5bc75cba9ef77fef96b9ad8769c3f541b41db40a9607afd1d83294da5c2a4f72"
