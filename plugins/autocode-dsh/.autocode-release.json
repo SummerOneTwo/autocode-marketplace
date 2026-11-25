@@ -1,17 +1,17 @@
 {
   "name": "autocode",
-  "version": "3.3.0",
+  "version": "4.0.0",
   "source_repository": "https://github.com/SZTU-ACM/AutoCode",
   "source_fingerprint": {
-    ".dsh-plugin": "dd862a2889359805e06e02641256ce8e9733c3a635f30bf1c3fdfed788411810",
-    "rules": "782a26f2bff4f96950a59f6bb751b017daa90107877aae7a146f7fa0ec308f81",
-    "skills": "0461c3ad5bf016125c1c0f6a13e2392e25eb57b7d28516102b24cffdc0a40c70",
-    "src": "3a7486166fee4858dc344cc4be14847de8733b92311a65007631460cbd02cc23",
-    "pyproject.toml": "9346b699de9ecea381c2e6436df8278fb5d8846b621739c3c925ee306fcee362",
-    "uv.lock": "83f410714fe1390a495f4281475fbad53b13e4b46e712bdc7a71b5e538299410",
-    "README.md": "281128a50d1154d26cc6dc9363043f30afb11be9cd891e6064ddbf9dd86e2511",
-    "TROUBLESHOOTING.md": "3c8d8823aa3546d4491311f9da7aa1d79a5afb159c6d09db6e986df429e01967",
-    "CHANGELOG.md": "2c6af6934b9a0beccdd4e2980ceaefa0457fa66f84411c9148d276e41e4e3bf4",
+    ".dsh-plugin": "b6c31da3091fba76f1c249b3e2aef7758a3f1d15f16681075a7b4a6d5c183f81",
+    "rules": "92985cfd31e5ba0cb461838f8aaea8c48df31dacdc69bd9a500aff0adf86d5ca",
+    "skills": "d91243a65bc12e5b29cc4d7d7b5368e70dd1dcfcec9abb4785ce2b04a56b2a5f",
+    "src": "f8011a135dcbb811ea3d1370fe1e8ebe94508dba70f3a428901dcfba2a377694",
+    "pyproject.toml": "be5ba00e12182211db8d8b631f8753e71e9d602300fcbc55e893f9fbcb000b2d",
+    "uv.lock": "ff08d7ec66304041a6b72ab81ef3cfb3c3a984101f12148f77e6f34aa56b252c",
+    "README.md": "1d42ac4af02e2229db8e3b3fecbca4db4fa4be077a8ae42fa0675e87556e91e6",
+    "TROUBLESHOOTING.md": "e6ba0d18056103d02b5ece6155231e20782d3b7578f68ff65a706098d203a7a0",
+    "CHANGELOG.md": "6ae873b771ad39e7e34b761e12fbbd2734fad3486c13500dc7018bbb265f694c",
     "LICENSE": "5bc75cba9ef77fef96b9ad8769c3f541b41db40a9607afd1d83294da5c2a4f72"
   },
   "target": "dsh"

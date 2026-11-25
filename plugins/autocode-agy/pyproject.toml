@@ -1,6 +1,6 @@
 [project]
 name = "autocode-mcp"
-version = "3.3.0"
+version = "4.0.0"
 description = "MCP Server for competitive programming problem creation, based on AutoCode paper"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,6 +21,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ast = [
+    "tree-sitter>=0.23",
+    "tree-sitter-cpp>=0.23",
+]
+formal = ["z3-solver>=4.13"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",

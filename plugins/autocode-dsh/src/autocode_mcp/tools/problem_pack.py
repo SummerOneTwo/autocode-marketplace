@@ -7,7 +7,7 @@ import re
 import shutil
 import xml.etree.ElementTree as ET
 from pathlib import PurePosixPath
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -22,7 +22,9 @@ from ..utils.communication_runner import (
 )
 from ..utils.exporters import (
     ExportDataMode,
+    export_cms,
     export_hydro,
+    export_icpc_kattis,
     export_polygon,
     export_qoj,
     map_tests_to_subtasks,
@@ -41,6 +43,25 @@ from ..workflow import (
 from .base import Tool, ToolResult, input_schema_from_model
 from .problem_helpers import _LIMIT_STRATEGY_TYPES
 from .schemas import ProblemPackPolygonInput
+
+_WRONG_SOLUTION_PREFIXES = (
+    "wrong_",
+    "wrong-",
+    "wa_",
+    "wa-",
+    "tle_",
+    "tle-",
+    "mle_",
+    "mle-",
+    "re_",
+    "re-",
+)
+
+
+def _is_wrong_solution_filename(fname: str) -> bool:
+    if not fname.endswith(".cpp"):
+        return False
+    return fname == "bf.cpp" or fname.startswith(_WRONG_SOLUTION_PREFIXES)
 
 
 def _pack_polygon_files(problem_dir: str) -> dict[str, list[str]]:
@@ -345,10 +366,10 @@ class ProblemPackPolygonTool(Tool):
         time_limit_ms: int | None = None,
         allow_time_limit_override: bool = False,
         memory_limit: int | None = None,
-        export_formats: list[Literal["polygon", "hydro", "qoj"]] | None = None,
+        export_formats: list[str] | None = None,
         export_data_mode: ExportDataMode = "hardlink",
     ) -> ToolResult:
-        """执行 Polygon / Hydro / QOJ 打包导出。"""
+        """执行 Polygon / Hydro / QOJ / ICPC-Kattis / CMS 打包导出。"""
         if not os.path.exists(problem_dir):
             return ToolResult.fail(f"Problem directory not found: {problem_dir}")
 
@@ -358,19 +379,19 @@ class ProblemPackPolygonTool(Tool):
                 f"unsupported export_data_mode {export_data_mode!r}; expected one of: copy, hardlink, zip"
             )
 
-        allowed_formats = {"polygon", "hydro", "qoj"}
+        allowed_formats = {"polygon", "hydro", "qoj", "icpc", "kattis", "icpc_kattis", "cms"}
         if export_formats is None:
             formats: list[str] = ["polygon"]
         else:
             if not isinstance(export_formats, list) or not export_formats:
                 return ToolResult.fail(
-                    "export_formats must be a non-empty list of: polygon, hydro, qoj"
+                    "export_formats must be a non-empty list of: polygon, hydro, qoj, icpc, kattis, cms"
                 )
             formats = []
             for fmt in export_formats:
                 if not isinstance(fmt, str) or fmt not in allowed_formats:
                     return ToolResult.fail(
-                        f"unsupported export format {fmt!r}; expected one of: polygon, hydro, qoj"
+                        f"unsupported export format {fmt!r}; expected one of: polygon, hydro, qoj, icpc, kattis, cms"
                     )
                 if fmt not in formats:
                     formats.append(fmt)
@@ -412,8 +433,8 @@ class ProblemPackPolygonTool(Tool):
         if manifest_model is None:
             manifest_model = default_manifest(os.path.basename(os.path.normpath(problem_dir)))
 
-        # 交互题允许无 .ans 文件（或由 Hydro/QOJ 导出器忽略空 .ans）；非交互题强制要求成对答案文件
-        if not manifest_is_interactive(manifest_model):
+        # 交互题与通信题允许无 .ans 文件（或由导出器忽略空/缺失 .ans）；标准题与 SPJ 强制要求成对答案文件
+        if not (manifest_is_interactive(manifest_model) or manifest_is_communication(manifest_model)):
             missing_answers = [
                 in_file for in_file in in_files if not os.path.exists(
                     os.path.join(tests_dir, f"{os.path.splitext(in_file)[0]}{answer_ext}")
@@ -730,7 +751,39 @@ class ProblemPackPolygonTool(Tool):
             except (ValueError, OSError) as exc:
                 return ToolResult.fail(f"QOJ export failed: {exc}")
 
-        # Scan for undeclared solutions/wrong_*.cpp on disk to prevent manifest/problem.xml desync
+        for icpc_fmt in ("icpc", "kattis", "icpc_kattis"):
+            if icpc_fmt in formats:
+                try:
+                    exports[icpc_fmt] = export_icpc_kattis(
+                        problem_dir,
+                        manifest_model,
+                        time_limit_ms=effective_time_limit_ms,
+                        memory_limit_mb=memory_limit_mb,
+                        in_files=in_files,
+                        answer_ext=answer_ext,
+                        tests_manifest=tests_manifest_dict,
+                        output_rel_dir=f"exports/{icpc_fmt}",
+                        data_mode=export_data_mode,
+                    )
+                except (ValueError, OSError) as exc:
+                    return ToolResult.fail(f"ICPC/Kattis export ({icpc_fmt}) failed: {exc}")
+
+        if "cms" in formats:
+            try:
+                exports["cms"] = export_cms(
+                    problem_dir,
+                    manifest_model,
+                    time_limit_ms=effective_time_limit_ms,
+                    memory_limit_mb=memory_limit_mb,
+                    in_files=in_files,
+                    answer_ext=answer_ext,
+                    tests_manifest=tests_manifest_dict,
+                    data_mode=export_data_mode,
+                )
+            except (ValueError, OSError) as exc:
+                return ToolResult.fail(f"CMS export failed: {exc}")
+
+        # Scan for undeclared wrong solutions on disk to prevent manifest/problem.xml desync
         pack_warnings: list[str] = []
         declared_sol_paths = {PurePosixPath(s.path.replace("\\", "/")).as_posix().lstrip("./") for s in manifest_model.solutions}
         sols_dir = os.path.join(problem_dir, "solutions")
@@ -738,8 +791,8 @@ class ProblemPackPolygonTool(Tool):
             undeclared_wrongs = sorted(
                 f"solutions/{fname}"
                 for fname in os.listdir(sols_dir)
-                if fname.startswith("wrong_")
-                and fname.endswith(".cpp")
+                if os.path.isfile(os.path.join(sols_dir, fname))
+                and _is_wrong_solution_filename(fname)
                 and f"solutions/{fname}" not in declared_sol_paths
             )
             if undeclared_wrongs:
@@ -756,6 +809,20 @@ class ProblemPackPolygonTool(Tool):
             expected_test_count=actual_test_count,
             exports_meta=exports,
         )
+        checks_map = export_verification.get("checks")
+        if isinstance(checks_map, dict):
+            for extra_fmt in ("icpc", "kattis", "icpc_kattis", "cms"):
+                meta = exports.get(extra_fmt)
+                if isinstance(meta, dict):
+                    validation = meta.get("config_validation", {})
+                    checks_map[extra_fmt] = {
+                        "passed": bool(isinstance(validation, dict) and validation.get("passed")),
+                        "present": True,
+                        "time_limit_ms": effective_time_limit_ms,
+                        "memory_limit_mb": memory_limit_mb,
+                        "test_count": meta.get("test_count"),
+                        "output_dir": meta.get("output_dir"),
+                    }
         if not export_verification["passed"]:
             return ToolResult.fail(
                 "Exported package self-verification failed: " + "; ".join(export_verification["errors"]),
