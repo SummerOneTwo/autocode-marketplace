@@ -1,20 +1,20 @@
 {
   "name": "autocode",
-  "version": "4.1.0",
+  "version": "4.1.1",
   "source_repository": "https://github.com/SZTU-ACM/AutoCode",
   "source_fingerprint": {
-    "plugin.json": "bc848fad66e025d5f6a85318a35ee7af7c1aea65d2d3ac51ed5b1c01401f2ed8",
+    "plugin.json": "01326b92e02f756a896b9ba13373613ea05252da3cdd5077c09989a2377a0b87",
     "mcp_config.json": "45887ee0ba5d081e0463ea8d6020baacdce12219302715cfd358e3626836c0fd",
     "rules": "0aa3702faa732b885f27ecc2a4a46e48bfc95d4fe4cc5835f5b323a1cb768ddd",
     "assets": "4d9a38182f654c6e685f00862131640374e4197c194c2545c1ff04bb8d4d6174",
     "agents": "f8eac63b03ec6f1ef098702415b4e089144c800bc08f7f7424696eb1870dfcf3",
     "skills": "2e2f6ca72f07e5c17606a4ad9ffff5f4759bb8670b8f61f04365e59a48dea81e",
-    "src": "24aebe926a45599969cc930e9cda545772a4e5a7a8ff3a5b5f7aa068e49e8d54",
-    "pyproject.toml": "11aad4a6db16672a9aa910171293aebaa30068aa70826984090759ac2359555c",
-    "uv.lock": "9fa55dfb9cd20bec6f7c627189d93670dfe7ff56b4aba45b7818b4ed5924b698",
-    "README.md": "495b234e0cbceef7202e6e69b0d6b8619cae48ba35098454c5d7675bc9591c56",
+    "src": "e2f28d2f16a2c97452a57be0d98df0e2a9abbb4a4e6ab7df960b7c7b04711363",
+    "pyproject.toml": "3c7dff1f7df86fb9428270c2bb5aad97b9aade3ac3ade7b028bd96ad9ae681c4",
+    "uv.lock": "898ffce3586e603937ebb54123f9165e952e5d86a397f734168ed68b84ee04c2",
+    "README.md": "98a11eee71a4dd5c894865a40b75b235d0cd0c4d083198704f1adc435f84159c",
     "TROUBLESHOOTING.md": "e6ba0d18056103d02b5ece6155231e20782d3b7578f68ff65a706098d203a7a0",
-    "CHANGELOG.md": "74187416c34ec4aba6fce8d31e6b6686e00fd6bc235c71aeaf3d7efaf5c61e75",
+    "CHANGELOG.md": "c1d74d9407ed0263a1fce21c34fcb750e301daa21b4de288bebb4a1ed25ace23",
     "LICENSE": "5bc75cba9ef77fef96b9ad8769c3f541b41db40a9607afd1d83294da5c2a4f72"
   },
   "target": "agy"
