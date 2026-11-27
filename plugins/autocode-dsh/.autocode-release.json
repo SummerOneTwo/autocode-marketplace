@@ -1,17 +1,17 @@
 {
   "name": "autocode",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "source_repository": "https://github.com/SZTU-ACM/AutoCode",
   "source_fingerprint": {
-    ".dsh-plugin": "b6c31da3091fba76f1c249b3e2aef7758a3f1d15f16681075a7b4a6d5c183f81",
-    "rules": "92985cfd31e5ba0cb461838f8aaea8c48df31dacdc69bd9a500aff0adf86d5ca",
-    "skills": "d91243a65bc12e5b29cc4d7d7b5368e70dd1dcfcec9abb4785ce2b04a56b2a5f",
-    "src": "e7f953098069f2af7d7536101890422bab29f30d918b0c5820effc60897c4810",
-    "pyproject.toml": "be5ba00e12182211db8d8b631f8753e71e9d602300fcbc55e893f9fbcb000b2d",
-    "uv.lock": "ff08d7ec66304041a6b72ab81ef3cfb3c3a984101f12148f77e6f34aa56b252c",
-    "README.md": "4a1744d2a9f7af700704024953bff8f84f8ba640d39b78a5d1fda76cc166a02d",
+    ".dsh-plugin": "715348e436018eced4ae53c8de2a5357642991e1f199157eef2277c37a590306",
+    "rules": "0aa3702faa732b885f27ecc2a4a46e48bfc95d4fe4cc5835f5b323a1cb768ddd",
+    "skills": "2e2f6ca72f07e5c17606a4ad9ffff5f4759bb8670b8f61f04365e59a48dea81e",
+    "src": "24aebe926a45599969cc930e9cda545772a4e5a7a8ff3a5b5f7aa068e49e8d54",
+    "pyproject.toml": "11aad4a6db16672a9aa910171293aebaa30068aa70826984090759ac2359555c",
+    "uv.lock": "9fa55dfb9cd20bec6f7c627189d93670dfe7ff56b4aba45b7818b4ed5924b698",
+    "README.md": "495b234e0cbceef7202e6e69b0d6b8619cae48ba35098454c5d7675bc9591c56",
     "TROUBLESHOOTING.md": "e6ba0d18056103d02b5ece6155231e20782d3b7578f68ff65a706098d203a7a0",
-    "CHANGELOG.md": "6ae873b771ad39e7e34b761e12fbbd2734fad3486c13500dc7018bbb265f694c",
+    "CHANGELOG.md": "74187416c34ec4aba6fce8d31e6b6686e00fd6bc235c71aeaf3d7efaf5c61e75",
     "LICENSE": "5bc75cba9ef77fef96b9ad8769c3f541b41db40a9607afd1d83294da5c2a4f72"
   },
   "target": "dsh"

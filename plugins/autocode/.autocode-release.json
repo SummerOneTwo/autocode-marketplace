@@ -1,22 +1,22 @@
 {
   "name": "autocode",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "source_repository": "https://github.com/SZTU-ACM/AutoCode",
   "source_fingerprint": {
-    ".claude-plugin": "9db1edef3b1509703576724872b103832bf85117077aaedf052d4694b0c6e855",
-    ".codex-plugin": "0376b8c39b1bf3e697cb975f97127dba65bb5ed04170da5def2927edf1568242",
+    ".claude-plugin": "0d67069419c281807927ce08cc510be46cd7331941964d585ce81d4bb851364d",
+    ".codex-plugin": "f8a37dc6e154d95314d3c8f43fde26635941bef1ec911457609c76036c3bf0e2",
     ".mcp.json": "5ae3b1d05f87638b7f1be2ee48bf6524f16bce903e9e31895fdb1124774cf103",
     "settings.json": "13139917723f8d6590472d6af4c31c86521aa55e637ad095253bdbc2035af20b",
     "hooks": "67af85dedc08815b52c9bc2e36698b35b01e62ff9931afe032e72fc683c00ba2",
-    "agents": "ddf5d2cb28bc3b38eadb2435175de7ac52f1acb099f95a0c1daf4a1ff22a6641",
-    "skills": "d91243a65bc12e5b29cc4d7d7b5368e70dd1dcfcec9abb4785ce2b04a56b2a5f",
+    "agents": "f8eac63b03ec6f1ef098702415b4e089144c800bc08f7f7424696eb1870dfcf3",
+    "skills": "2e2f6ca72f07e5c17606a4ad9ffff5f4759bb8670b8f61f04365e59a48dea81e",
     "scripts": "756850f0d9e60165d91d29614131c07985d022f1fde80fdbd5eaa47ab2e7feac",
-    "src": "e7f953098069f2af7d7536101890422bab29f30d918b0c5820effc60897c4810",
-    "pyproject.toml": "be5ba00e12182211db8d8b631f8753e71e9d602300fcbc55e893f9fbcb000b2d",
-    "uv.lock": "ff08d7ec66304041a6b72ab81ef3cfb3c3a984101f12148f77e6f34aa56b252c",
-    "README.md": "4a1744d2a9f7af700704024953bff8f84f8ba640d39b78a5d1fda76cc166a02d",
+    "src": "24aebe926a45599969cc930e9cda545772a4e5a7a8ff3a5b5f7aa068e49e8d54",
+    "pyproject.toml": "11aad4a6db16672a9aa910171293aebaa30068aa70826984090759ac2359555c",
+    "uv.lock": "9fa55dfb9cd20bec6f7c627189d93670dfe7ff56b4aba45b7818b4ed5924b698",
+    "README.md": "495b234e0cbceef7202e6e69b0d6b8619cae48ba35098454c5d7675bc9591c56",
     "TROUBLESHOOTING.md": "e6ba0d18056103d02b5ece6155231e20782d3b7578f68ff65a706098d203a7a0",
-    "CHANGELOG.md": "6ae873b771ad39e7e34b761e12fbbd2734fad3486c13500dc7018bbb265f694c",
+    "CHANGELOG.md": "74187416c34ec4aba6fce8d31e6b6686e00fd6bc235c71aeaf3d7efaf5c61e75",
     "LICENSE": "5bc75cba9ef77fef96b9ad8769c3f541b41db40a9607afd1d83294da5c2a4f72"
   }
 }
